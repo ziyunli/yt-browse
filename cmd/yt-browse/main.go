@@ -15,11 +15,10 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: yt-browse <channel>\n\n")
-		fmt.Fprintf(os.Stderr, "  channel: YouTube handle (@mkbhd), URL, or channel ID\n\n")
+		fmt.Fprintf(os.Stderr, "  channel: YouTube handle (@ddrjake), URL, or channel ID\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
-		fmt.Fprintf(os.Stderr, "  yt-browse @mkbhd\n")
-		fmt.Fprintf(os.Stderr, "  yt-browse https://youtube.com/@mkbhd\n")
-		fmt.Fprintf(os.Stderr, "  yt-browse UCBcRF18a7Qf58cCRy5xuWwQ\n")
+		fmt.Fprintf(os.Stderr, "  yt-browse @ddrjake\n")
+		fmt.Fprintf(os.Stderr, "  yt-browse https://youtube.com/@ddrjake\n")
 		os.Exit(1)
 	}
 

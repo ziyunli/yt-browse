@@ -91,9 +91,15 @@ type Model struct {
 	filterMode  filterMode // fuzzy or exact
 	fstate      *filterState // shared with delegate for match highlighting
 
+	// Shorts filtering
+	hideShorts bool // hide videos ≤ 60s (default true)
+
 	// Detail
 	detailViewport viewport.Model
 	showDetail     bool
+
+	// Help overlay
+	showHelp bool
 
 	// Error
 	lastError error
@@ -148,6 +154,7 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 		fstate:         fs,
 		detailViewport: vp,
 		showDetail:     true,
+		hideShorts:     true,
 		playlistSort:   sortNone,
 		videoSort:      sortNone,
 	}
@@ -168,12 +175,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// Dismiss help overlay on any key
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+
 		// When filter input is active, handle keys for the filter
 		if m.filtering {
 			return m.handleFilterKey(msg)
 		}
 
 		switch {
+		case key.Matches(msg, m.keys.Help):
+			m.showHelp = true
+			return m, nil
+
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 
@@ -268,6 +285,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Refresh):
 			return m.handleRefresh()
+
+		case key.Matches(msg, m.keys.ToggleShorts):
+			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
+				m.hideShorts = !m.hideShorts
+				m.applyFilterAndSort()
+				m.updateDetail()
+			}
+			return m, nil
 		}
 
 	case channelResolvedMsg:
@@ -357,7 +382,12 @@ func (m Model) View() tea.View {
 	sections = append(sections, m.renderContent())
 	sections = append(sections, m.renderHelpBar())
 
-	str := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	var str string
+	if m.showHelp {
+		str = m.renderHelpOverlay()
+	} else {
+		str = lipgloss.JoinVertical(lipgloss.Left, sections...)
+	}
 
 	v := tea.NewView(str)
 	v.AltScreen = true
@@ -439,8 +469,13 @@ func (m *Model) sortedPlaylistItems() []list.Item {
 }
 
 func (m *Model) sortedVideoItems(videos []youtube.Video, sortBy sortField) []list.Item {
-	sorted := make([]youtube.Video, len(videos))
-	copy(sorted, videos)
+	sorted := make([]youtube.Video, 0, len(videos))
+	for _, v := range videos {
+		if m.hideShorts && v.Duration > 0 && v.Duration <= 60*1e9 { // ≤ 60 seconds in nanoseconds
+			continue
+		}
+		sorted = append(sorted, v)
+	}
 
 	switch sortBy {
 	case sortByDate:
@@ -695,6 +730,9 @@ func (m Model) renderHeader() string {
 		return statusStyle.Render(fmt.Sprintf("Resolving %s...", m.channelInput))
 	}
 	title := fmt.Sprintf("yt-browse: %s (%s)", m.channel.Handle, m.channel.Title)
+	if (m.activeView == viewVideos || m.activeView == viewPlaylistVideos) && m.hideShorts {
+		title += helpDescStyle.Render("  [hiding shorts]")
+	}
 	return headerStyle.Render(title)
 }
 
@@ -720,7 +758,13 @@ func (m Model) renderTabBar() string {
 
 	videoLabel := "Videos"
 	if m.videoLoadState == loadDone {
-		videoLabel = fmt.Sprintf("Videos (%d)", len(m.videos))
+		total := len(m.videos)
+		shown := len(m.videoList.Items())
+		if m.hideShorts && shown < total {
+			videoLabel = fmt.Sprintf("Videos (%d/%d)", shown, total)
+		} else {
+			videoLabel = fmt.Sprintf("Videos (%d)", total)
+		}
 	} else if m.videoLoadState == loadLoading {
 		videoLabel = "Videos ..."
 	}
@@ -785,80 +829,98 @@ func (m Model) renderContent() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detail)
 }
 
+// helpItem renders a compact help item where the key letter is highlighted.
+// If active is true, the whole thing is rendered in the active sort style.
+func helpItem(key, rest string, active bool) string {
+	if active {
+		return sortActiveStyle.Render(key+rest) + sortActiveStyle.Render("*")
+	}
+	return helpKeyStyle.Render(key) + helpDescStyle.Render(rest)
+}
+
+// helpItemMid renders a word with a highlighted key in the middle (e.g., d[u]ration).
+func helpItemMid(before, key, after string, active bool) string {
+	if active {
+		return sortActiveStyle.Render(before+key+after) + sortActiveStyle.Render("*")
+	}
+	return helpDescStyle.Render(before) + helpKeyStyle.Render(key) + helpDescStyle.Render(after)
+}
+
 func (m Model) renderHelpBar() string {
 	var parts []string
+	sep := helpDescStyle.Render(" · ")
 
-	add := func(k, desc string) {
-		parts = append(parts, helpKeyStyle.Render(k)+" "+helpDescStyle.Render(desc))
-	}
-
-	add("/", "filter")
+	// Filter status
+	parts = append(parts, helpItem("/", "filter", false))
 	if m.filterText != "" {
-		add("esc", "clear")
-	}
-	add("ctrl+f", "fuzzy/exact")
-
-	type sortOption struct {
-		key   string
-		label string
-		field sortField
+		parts = append(parts, helpItem("esc", " clear", false))
 	}
 
 	switch m.activeView {
 	case viewPlaylists:
-		add("tab", "switch")
-		add("enter", "view")
-		add("o", "open")
-		currentSort := m.playlistSort
-		opts := []sortOption{
-			{"d", "date", sortByDate},
-		}
-		for _, o := range opts {
-			if o.field == currentSort {
-				parts = append(parts, sortActiveStyle.Render(o.key+" "+o.label+"*"))
-			} else {
-				add(o.key, o.label)
-			}
-		}
+		parts = append(parts, helpItem("tab", " switch", false))
+		parts = append(parts, helpItem("⏎", " view", false))
+		parts = append(parts, helpItem("o", "pen", false))
+		parts = append(parts, helpItem("d", "ate", m.playlistSort == sortByDate))
 
 	case viewVideos:
-		add("tab", "switch")
-		add("enter", "open")
-		currentSort := m.videoSort
-		opts := []sortOption{
-			{"d", "date", sortByDate},
-			{"v", "views", sortByViews},
-			{"u", "duration", sortByDuration},
-		}
-		for _, o := range opts {
-			if o.field == currentSort {
-				parts = append(parts, sortActiveStyle.Render(o.key+" "+o.label+"*"))
-			} else {
-				add(o.key, o.label)
-			}
-		}
+		parts = append(parts, helpItem("tab", " switch", false))
+		parts = append(parts, helpItem("⏎", " open", false))
+		parts = append(parts, helpItem("d", "ate", m.videoSort == sortByDate))
+		parts = append(parts, helpItem("v", "iews", m.videoSort == sortByViews))
+		parts = append(parts, helpItemMid("d", "u", "ration", m.videoSort == sortByDuration))
+		parts = append(parts, helpItem("s", "horts", m.hideShorts))
 
 	case viewPlaylistVideos:
-		add("bksp", "back")
-		add("enter", "open")
-		add("S-enter", "open playlist")
-		currentSort := m.playlistVideoSort
-		opts := []sortOption{
-			{"d", "date", sortByDate},
-			{"v", "views", sortByViews},
-			{"u", "duration", sortByDuration},
-		}
-		for _, o := range opts {
-			if o.field == currentSort {
-				parts = append(parts, sortActiveStyle.Render(o.key+" "+o.label+"*"))
-			} else {
-				add(o.key, o.label)
-			}
-		}
+		parts = append(parts, helpItem("⌫", " back", false))
+		parts = append(parts, helpItem("⏎", " open", false))
+		parts = append(parts, helpItem("d", "ate", m.playlistVideoSort == sortByDate))
+		parts = append(parts, helpItem("v", "iews", m.playlistVideoSort == sortByViews))
+		parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration))
+		parts = append(parts, helpItem("s", "horts", m.hideShorts))
 	}
 
-	add("r", "refresh")
-	add("q", "quit")
+	parts = append(parts, helpItem("?", " help", false))
+	parts = append(parts, helpItem("q", "uit", false))
 
-	return strings.Join(parts, helpDescStyle.Render("  |  "))
+	return strings.Join(parts, sep)
+}
+
+func (m Model) renderHelpOverlay() string {
+	title := helpOverlayTitleStyle.Render("Keybindings")
+
+	row := func(k, desc string) string {
+		return helpOverlayKeyStyle.Render(k) + helpOverlayDescStyle.Render(desc)
+	}
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	lines = append(lines, helpOverlayTitleStyle.Render("Navigation"))
+	lines = append(lines, row("tab", "Switch between playlists/videos"))
+	lines = append(lines, row("enter", "Open video / drill into playlist"))
+	lines = append(lines, row("o", "Open selected item in browser"))
+	lines = append(lines, row("backspace", "Back to playlists (from drill view)"))
+	lines = append(lines, row("S-enter / O", "Open playlist URL (from drill view)"))
+	lines = append(lines, "")
+	lines = append(lines, helpOverlayTitleStyle.Render("Filter & Sort"))
+	lines = append(lines, row("/", "Start filtering"))
+	lines = append(lines, row("esc", "Clear filter"))
+	lines = append(lines, row("ctrl+f", "Toggle fuzzy / exact filter"))
+	lines = append(lines, row("d", "Sort by date (toggle)"))
+	lines = append(lines, row("v", "Sort by views (toggle)"))
+	lines = append(lines, row("u", "Sort by duration (toggle)"))
+	lines = append(lines, row("s", "Toggle shorts visibility"))
+	lines = append(lines, "")
+	lines = append(lines, helpOverlayTitleStyle.Render("Other"))
+	lines = append(lines, row("r", "Refresh data from API"))
+	lines = append(lines, row("q / ctrl+c", "Quit"))
+	lines = append(lines, "")
+	lines = append(lines, helpDescStyle.Render("Press any key to close"))
+
+	content := strings.Join(lines, "\n")
+	box := helpOverlayStyle.Render(content)
+
+	// Center the overlay
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }

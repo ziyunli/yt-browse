@@ -72,4 +72,21 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF0000")).
 			Padding(1, 2)
+
+	// Help overlay
+	helpOverlayStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#FF6600")).
+				Padding(1, 2)
+
+	helpOverlayTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FF6600"))
+
+	helpOverlayKeyStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FF6600")).
+				Width(14)
+
+	helpOverlayDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#CCCCCC"))
 )
