@@ -28,7 +28,7 @@ go.work.sum
 .env
 
 # Binary
-yt-browse
+/yt-browse
 
 # Editor/IDE
 # .idea/
