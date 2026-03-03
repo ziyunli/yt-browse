@@ -11,8 +11,21 @@ type playlistsFetchedMsg struct{ playlists []youtube.Playlist }
 type playlistsErrorMsg struct{ err error }
 
 // Video fetching (uploads playlist)
-type videosFetchedMsg struct{ videos []youtube.Video }
-type videosErrorMsg struct{ err error }
+type videosFetchedMsg struct {
+	videos []youtube.Video
+	gen    int
+}
+type videosErrorMsg struct {
+	err error
+	gen int
+}
+
+// Video loading progress
+type videoLoadingMsg struct {
+	total  int
+	loaded int
+	gen    int
+}
 
 // Playlist video fetching (drill-in)
 type playlistVideosFetchedMsg struct{ videos []youtube.Video }

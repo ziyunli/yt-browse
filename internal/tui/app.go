@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -72,10 +73,15 @@ type Model struct {
 	playlistSort      sortField
 
 	// Videos (uploads)
-	videoList      list.Model
-	videoLoadState loadState
-	videos         []youtube.Video
-	videoSort      sortField
+	videoList       list.Model
+	videoLoadState  loadState
+	videos          []youtube.Video
+	videoSort       sortField
+	videoProgressCh <-chan videoLoadingMsg
+	videoTotal      int
+	videoLoaded     int
+	videoFetchGen   int
+	videoCancel     context.CancelFunc
 
 	// Playlist videos (drill-in)
 	currentPlaylist         *youtube.Playlist
@@ -95,8 +101,8 @@ type Model struct {
 	hideShorts bool // hide videos ≤ 60s (default true)
 
 	// Detail
-	detailViewport viewport.Model
-	showDetail     bool
+	detailViewport  viewport.Model
+	showDetail      bool
 
 	// Help overlay
 	showHelp bool
@@ -172,6 +178,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateSizes()
+		m.updateDetail()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -267,6 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.applyFilterAndSort()
 				m.updateDetail()
+				return m, nil
 			}
 			return m, nil
 
@@ -280,6 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.applyFilterAndSort()
 				m.updateDetail()
+				return m, nil
 			}
 			return m, nil
 
@@ -291,6 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hideShorts = !m.hideShorts
 				m.applyFilterAndSort()
 				m.updateDetail()
+				return m, nil
 			}
 			return m, nil
 		}
@@ -298,7 +308,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case channelResolvedMsg:
 		m.channel = msg.channel
 		m.playlistLoadState = loadLoading
-		return m, fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID)
+		return m, fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID, false)
 
 	case channelErrorMsg:
 		m.lastError = msg.err
@@ -312,25 +322,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Start fetching videos in background
 		if m.channel != nil && m.channel.UploadsPlaylistID != "" {
 			m.videoLoadState = loadLoading
-			cmds = append(cmds, fetchVideosCmd(m.ytClient, m.cache, m.channel.UploadsPlaylistID, m.channel.ID))
+			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
+			return m, cmd
 		}
-		return m, tea.Batch(cmds...)
+		return m, nil
 
 	case playlistsErrorMsg:
 		m.playlistLoadState = loadError
 		m.lastError = msg.err
 		return m, nil
 
+	case videoLoadingMsg:
+		if msg.gen != m.videoFetchGen {
+			return m, nil
+		}
+		m.videoTotal = msg.total
+		m.videoLoaded = msg.loaded
+		return m, listenForVideoProgress(m.videoProgressCh)
+
 	case videosFetchedMsg:
+		if msg.gen != m.videoFetchGen {
+			return m, nil
+		}
 		m.videos = msg.videos
 		m.videoLoadState = loadDone
+		m.clearVideoProgress()
+		// Always populate video list so tab bar count is correct even if
+		// we're on the playlists tab when this arrives in the background.
+		m.videoList.SetItems(m.sortedVideoItems(m.videos, m.videoSort))
 		m.applyFilterAndSort()
 		m.updateDetail()
 		return m, nil
 
 	case videosErrorMsg:
+		if msg.gen != m.videoFetchGen {
+			return m, nil
+		}
 		m.videoLoadState = loadError
 		m.lastError = msg.err
+		m.clearVideoProgress()
 		return m, nil
 
 	case playlistVideosFetchedMsg:
@@ -344,6 +374,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playlistVideoLoadState = loadError
 		m.lastError = msg.err
 		return m, nil
+
 	}
 
 	// Delegate to active list
@@ -565,7 +596,8 @@ func (m *Model) handleTabSwitch() (tea.Model, tea.Cmd) {
 		m.activeView = viewVideos
 		if m.videoLoadState == loadIdle && m.channel != nil {
 			m.videoLoadState = loadLoading
-			return m, fetchVideosCmd(m.ytClient, m.cache, m.channel.UploadsPlaylistID, m.channel.ID)
+			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
+			return m, cmd
 		}
 	case viewVideos:
 		m.activeView = viewPlaylists
@@ -579,7 +611,8 @@ func (m *Model) handleTabSwitch() (tea.Model, tea.Cmd) {
 			m.videoLoadState = loadLoading
 			m.applyFilterAndSort()
 			m.updateDetail()
-			return m, fetchVideosCmd(m.ytClient, m.cache, m.channel.UploadsPlaylistID, m.channel.ID)
+			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
+			return m, cmd
 		}
 	}
 	// Re-apply filter to the new view
@@ -610,7 +643,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.fstate.text = ""
 		m.playlistVideoList.SetItems(nil)
 		m.updateSizes()
-		return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, p.ID, p.ChannelID)
+		return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, p.ID, p.ChannelID, false)
 	case VideoItem:
 		return m, openURLCmd(item.URL())
 	}
@@ -657,17 +690,52 @@ func (m *Model) handleRefresh() (tea.Model, tea.Cmd) {
 	switch m.activeView {
 	case viewPlaylists:
 		m.playlistLoadState = loadLoading
-		return m, fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID)
+		m.playlists = nil
+		m.playlistList.SetItems(nil)
+		m.updateDetail()
+		return m, fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID, true)
 	case viewVideos:
 		m.videoLoadState = loadLoading
-		return m, fetchVideosCmd(m.ytClient, m.cache, m.channel.UploadsPlaylistID, m.channel.ID)
+		m.videos = nil
+		m.videoList.SetItems(nil)
+		m.updateDetail()
+		cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, true)
+		return m, cmd
 	case viewPlaylistVideos:
 		if m.currentPlaylist != nil {
 			m.playlistVideoLoadState = loadLoading
-			return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, m.currentPlaylist.ID, m.currentPlaylist.ChannelID)
+			m.playlistVideos = nil
+			m.playlistVideoList.SetItems(nil)
+			m.updateDetail()
+			return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, m.currentPlaylist.ID, m.currentPlaylist.ChannelID, true)
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) startVideoFetch(playlistID, channelID string, skipCache bool) tea.Cmd {
+	// Cancel any in-flight fetch
+	if m.videoCancel != nil {
+		m.videoCancel()
+	}
+	m.videoFetchGen++
+	m.videoTotal = 0
+	m.videoLoaded = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	m.videoCancel = cancel
+	progressCh := make(chan videoLoadingMsg, 64)
+	m.videoProgressCh = progressCh
+	return tea.Batch(
+		fetchVideosCmd(m.ytClient, m.cache, playlistID, channelID, m.videoFetchGen, ctx, progressCh, skipCache),
+		listenForVideoProgress(progressCh),
+	)
+}
+
+func (m *Model) clearVideoProgress() {
+	m.videoTotal = 0
+	m.videoLoaded = 0
+	m.videoProgressCh = nil
+	m.videoCancel = nil
 }
 
 func (m *Model) updateDetail() {
@@ -711,6 +779,16 @@ func (m *Model) updateSizes() {
 		m.playlistVideoList.SetWidth(m.width)
 		m.playlistVideoList.SetHeight(contentHeight)
 	}
+}
+
+func (m *Model) countNonShorts(videos []youtube.Video) int {
+	n := 0
+	for _, v := range videos {
+		if v.Duration <= 0 || v.Duration > 60*1e9 {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Model) detailWidth() int {
@@ -759,14 +837,22 @@ func (m Model) renderTabBar() string {
 	videoLabel := "Videos"
 	if m.videoLoadState == loadDone {
 		total := len(m.videos)
+		nonShorts := total
+		if m.hideShorts {
+			nonShorts = m.countNonShorts(m.videos)
+		}
 		shown := len(m.videoList.Items())
-		if m.hideShorts && shown < total {
-			videoLabel = fmt.Sprintf("Videos (%d/%d)", shown, total)
+		if shown < nonShorts {
+			videoLabel = fmt.Sprintf("Videos (%d/%d)", shown, nonShorts)
 		} else {
-			videoLabel = fmt.Sprintf("Videos (%d)", total)
+			videoLabel = fmt.Sprintf("Videos (%d)", nonShorts)
 		}
 	} else if m.videoLoadState == loadLoading {
-		videoLabel = "Videos ..."
+		if m.videoTotal > 0 {
+			videoLabel = fmt.Sprintf("Videos (%d/%d)", m.videoLoaded, m.videoTotal)
+		} else {
+			videoLabel = "Videos ..."
+		}
 	}
 
 	var playlistTab, videoTab string
@@ -809,7 +895,11 @@ func (m Model) renderContent() string {
 		}
 	case viewVideos:
 		if m.videoLoadState == loadLoading && len(m.videos) == 0 {
-			listView = statusStyle.Render("  Loading videos...")
+			if m.videoTotal > 0 {
+				listView = statusStyle.Render(fmt.Sprintf("  Loading videos (%d/%d)...", m.videoLoaded, m.videoTotal))
+			} else {
+				listView = statusStyle.Render("  Loading videos...")
+			}
 		} else {
 			listView = m.videoList.View()
 		}

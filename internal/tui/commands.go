@@ -23,11 +23,12 @@ func resolveChannelCmd(client *youtube.Client, store *cache.Store, input string)
 	}
 }
 
-func fetchPlaylistsCmd(client *youtube.Client, store *cache.Store, channelID string) tea.Cmd {
+func fetchPlaylistsCmd(client *youtube.Client, store *cache.Store, channelID string, skipCache bool) tea.Cmd {
 	return func() tea.Msg {
-		// Check cache first
-		if cached, _ := store.GetPlaylists(channelID); cached != nil {
-			return playlistsFetchedMsg{playlists: cached}
+		if !skipCache {
+			if cached, _ := store.GetPlaylists(channelID); cached != nil {
+				return playlistsFetchedMsg{playlists: cached}
+			}
 		}
 
 		ctx := context.Background()
@@ -41,31 +42,47 @@ func fetchPlaylistsCmd(client *youtube.Client, store *cache.Store, channelID str
 	}
 }
 
-func fetchVideosCmd(client *youtube.Client, store *cache.Store, uploadsPlaylistID, channelID string) tea.Cmd {
+func fetchVideosCmd(client *youtube.Client, store *cache.Store, uploadsPlaylistID, channelID string, gen int, ctx context.Context, progressCh chan<- videoLoadingMsg, skipCache bool) tea.Cmd {
 	return func() tea.Msg {
-		// Check cache first
-		if cached, _ := store.GetVideos(channelID); cached != nil {
-			return videosFetchedMsg{videos: cached}
+		defer close(progressCh)
+
+		if !skipCache {
+			if cached, _ := store.GetVideos(channelID); cached != nil {
+				return videosFetchedMsg{videos: cached, gen: gen}
+			}
 		}
 
-		ctx := context.Background()
-		videos, err := client.FetchVideos(ctx, uploadsPlaylistID, channelID)
+		videos, err := client.FetchVideos(ctx, uploadsPlaylistID, channelID, func(total, loaded int) {
+			progressCh <- videoLoadingMsg{total: total, loaded: loaded, gen: gen}
+		})
 		if err != nil {
-			return videosErrorMsg{err: err}
+			return videosErrorMsg{err: err, gen: gen}
 		}
 		_ = store.SetVideos(channelID, videos)
-		return videosFetchedMsg{videos: videos}
+		return videosFetchedMsg{videos: videos, gen: gen}
 	}
 }
 
-func fetchPlaylistVideosCmd(client *youtube.Client, store *cache.Store, playlistID, channelID string) tea.Cmd {
+func listenForVideoProgress(ch <-chan videoLoadingMsg) tea.Cmd {
 	return func() tea.Msg {
-		if cached, _ := store.GetPlaylistVideos(channelID, playlistID); cached != nil {
-			return playlistVideosFetchedMsg{videos: cached}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func fetchPlaylistVideosCmd(client *youtube.Client, store *cache.Store, playlistID, channelID string, skipCache bool) tea.Cmd {
+	return func() tea.Msg {
+		if !skipCache {
+			if cached, _ := store.GetPlaylistVideos(channelID, playlistID); cached != nil {
+				return playlistVideosFetchedMsg{videos: cached}
+			}
 		}
 
 		ctx := context.Background()
-		videos, err := client.FetchVideos(ctx, playlistID, channelID)
+		videos, err := client.FetchVideos(ctx, playlistID, channelID, nil)
 		if err != nil {
 			return playlistVideosErrorMsg{err: err}
 		}

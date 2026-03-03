@@ -3,11 +3,13 @@ package youtube
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sosodev/duration"
-	yt "google.golang.org/api/youtube/v3"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	yt "google.golang.org/api/youtube/v3"
 )
 
 // Type alias to avoid collision with our Channel type in resolve.go
@@ -71,14 +73,27 @@ func (c *Client) FetchPlaylists(ctx context.Context, channelID string) ([]Playli
 
 // FetchVideos returns all videos from a playlist with full details.
 // Works for uploads playlists, user-created playlists, or any other playlist ID.
-func (c *Client) FetchVideos(ctx context.Context, playlistID string, channelID string) ([]Video, error) {
-	var allVideos []Video
+// If onProgress is non-nil, it is called with (total, loaded) counts during fetching.
+//
+// Pagination and detail fetches are pipelined: as each page of IDs arrives,
+// a goroutine immediately starts fetching details for those IDs (up to 5 concurrent).
+func (c *Client) FetchVideos(ctx context.Context, playlistID string, channelID string, onProgress func(total, loaded int)) ([]Video, error) {
+	var (
+		mu        sync.Mutex
+		allVideos []Video
+		fetchErr  error
+		wg        sync.WaitGroup
+	)
+
+	sem := make(chan struct{}, 5) // max 5 concurrent detail requests
+	total := 0
 	pageToken := ""
 
 	for {
-		call := c.service.PlaylistItems.List([]string{"snippet", "contentDetails"}).
+		call := c.service.PlaylistItems.List([]string{"contentDetails"}).
 			PlaylistId(playlistID).
 			MaxResults(50).
+			Fields(googleapi.Field("nextPageToken,pageInfo/totalResults,items/contentDetails/videoId")).
 			Context(ctx)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
@@ -86,24 +101,50 @@ func (c *Client) FetchVideos(ctx context.Context, playlistID string, channelID s
 
 		resp, err := call.Do()
 		if err != nil {
+			wg.Wait()
 			return nil, fmt.Errorf("playlistItems.list for playlist %s: %w", playlistID, err)
 		}
 
-		// Collect video IDs for this page
-		var videoIDs []string
-		for _, item := range resp.Items {
-			if item.ContentDetails != nil {
-				videoIDs = append(videoIDs, item.ContentDetails.VideoId)
+		if total == 0 && resp.PageInfo != nil {
+			total = int(resp.PageInfo.TotalResults)
+			if onProgress != nil {
+				onProgress(total, 0)
 			}
 		}
 
-		// Batch-fetch video details
-		if len(videoIDs) > 0 {
-			details, err := c.fetchVideoDetails(ctx, videoIDs, channelID)
-			if err != nil {
-				return nil, err
+		var ids []string
+		for _, item := range resp.Items {
+			if item.ContentDetails != nil {
+				ids = append(ids, item.ContentDetails.VideoId)
 			}
-			allVideos = append(allVideos, details...)
+		}
+
+		if len(ids) > 0 {
+			wg.Add(1)
+			go func(ids []string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				videos, err := c.fetchVideoDetails(ctx, ids, channelID)
+
+				var loaded int
+				mu.Lock()
+				if err != nil {
+					if fetchErr == nil {
+						fetchErr = err
+					}
+					mu.Unlock()
+					return
+				}
+				allVideos = append(allVideos, videos...)
+				loaded = len(allVideos)
+				mu.Unlock()
+
+				if onProgress != nil {
+					onProgress(total, loaded)
+				}
+			}(ids)
 		}
 
 		if resp.NextPageToken == "" {
@@ -112,6 +153,11 @@ func (c *Client) FetchVideos(ctx context.Context, playlistID string, channelID s
 		pageToken = resp.NextPageToken
 	}
 
+	wg.Wait()
+
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
 	return allVideos, nil
 }
 
@@ -119,6 +165,7 @@ func (c *Client) FetchVideos(ctx context.Context, playlistID string, channelID s
 func (c *Client) fetchVideoDetails(ctx context.Context, videoIDs []string, channelID string) ([]Video, error) {
 	call := c.service.Videos.List([]string{"snippet", "contentDetails", "statistics"}).
 		Id(videoIDs...).
+		Fields(googleapi.Field("items(id,snippet(title,description,publishedAt,thumbnails/medium/url),contentDetails/duration,statistics(viewCount,likeCount))")).
 		Context(ctx)
 
 	resp, err := call.Do()
