@@ -3,11 +3,12 @@ package youtube
 import "time"
 
 type Channel struct {
-	ID                string
-	Title             string
-	Handle            string
-	Description       string
-	UploadsPlaylistID string
+	ID                  string
+	Title               string
+	Handle              string
+	Description         string
+	UploadsPlaylistID  string
+	LongFormPlaylistID string
 }
 
 type Playlist struct {

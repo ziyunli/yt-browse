@@ -121,5 +121,9 @@ func channelFromItem(item *ytChannel) *Channel {
 	if item.ContentDetails != nil && item.ContentDetails.RelatedPlaylists != nil {
 		ch.UploadsPlaylistID = item.ContentDetails.RelatedPlaylists.Uploads
 	}
+	// Derive long-form playlist ID: UC{suffix} → UULF{suffix}
+	if strings.HasPrefix(ch.ID, "UC") {
+		ch.LongFormPlaylistID = "UULF" + ch.ID[2:]
+	}
 	return ch
 }

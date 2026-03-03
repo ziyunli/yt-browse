@@ -16,7 +16,6 @@ type keyMap struct {
 	SortViews        key.Binding
 	SortDuration     key.Binding
 	Refresh          key.Binding
-	ToggleShorts     key.Binding
 	Help             key.Binding
 }
 
@@ -73,10 +72,6 @@ func defaultKeyMap() keyMap {
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh"),
-		),
-		ToggleShorts: key.NewBinding(
-			key.WithKeys("s"),
-			key.WithHelp("s", "toggle shorts"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),

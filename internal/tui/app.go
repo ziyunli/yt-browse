@@ -97,9 +97,6 @@ type Model struct {
 	filterMode  filterMode // fuzzy or exact
 	fstate      *filterState // shared with delegate for match highlighting
 
-	// Shorts filtering
-	hideShorts bool // hide videos ≤ 60s (default true)
-
 	// Detail
 	detailViewport  viewport.Model
 	showDetail      bool
@@ -160,7 +157,6 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 		fstate:         fs,
 		detailViewport: vp,
 		showDetail:     true,
-		hideShorts:     true,
 		playlistSort:   sortNone,
 		videoSort:      sortNone,
 	}
@@ -295,14 +291,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Refresh):
 			return m.handleRefresh()
 
-		case key.Matches(msg, m.keys.ToggleShorts):
-			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
-				m.hideShorts = !m.hideShorts
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
 		}
 
 	case channelResolvedMsg:
@@ -320,10 +308,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilterAndSort()
 		m.updateDetail()
 		// Start fetching videos in background
-		if m.channel != nil && m.channel.UploadsPlaylistID != "" {
+		if m.channel != nil && m.channel.LongFormPlaylistID != "" {
 			m.videoLoadState = loadLoading
-			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
-			return m, cmd
+			return m, m.startVideoFetch(m.channel.LongFormPlaylistID, m.channel.ID, false)
 		}
 		return m, nil
 
@@ -500,13 +487,8 @@ func (m *Model) sortedPlaylistItems() []list.Item {
 }
 
 func (m *Model) sortedVideoItems(videos []youtube.Video, sortBy sortField) []list.Item {
-	sorted := make([]youtube.Video, 0, len(videos))
-	for _, v := range videos {
-		if m.hideShorts && v.Duration > 0 && v.Duration <= 60*1e9 { // ≤ 60 seconds in nanoseconds
-			continue
-		}
-		sorted = append(sorted, v)
-	}
+	sorted := make([]youtube.Video, len(videos))
+	copy(sorted, videos)
 
 	switch sortBy {
 	case sortByDate:
@@ -596,7 +578,7 @@ func (m *Model) handleTabSwitch() (tea.Model, tea.Cmd) {
 		m.activeView = viewVideos
 		if m.videoLoadState == loadIdle && m.channel != nil {
 			m.videoLoadState = loadLoading
-			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
+			cmd := m.startVideoFetch(m.channel.LongFormPlaylistID, m.channel.ID, false)
 			return m, cmd
 		}
 	case viewVideos:
@@ -611,7 +593,7 @@ func (m *Model) handleTabSwitch() (tea.Model, tea.Cmd) {
 			m.videoLoadState = loadLoading
 			m.applyFilterAndSort()
 			m.updateDetail()
-			cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, false)
+			cmd := m.startVideoFetch(m.channel.LongFormPlaylistID, m.channel.ID, false)
 			return m, cmd
 		}
 	}
@@ -699,8 +681,7 @@ func (m *Model) handleRefresh() (tea.Model, tea.Cmd) {
 		m.videos = nil
 		m.videoList.SetItems(nil)
 		m.updateDetail()
-		cmd := m.startVideoFetch(m.channel.UploadsPlaylistID, m.channel.ID, true)
-		return m, cmd
+		return m, m.startVideoFetch(m.channel.LongFormPlaylistID, m.channel.ID, true)
 	case viewPlaylistVideos:
 		if m.currentPlaylist != nil {
 			m.playlistVideoLoadState = loadLoading
@@ -781,15 +762,7 @@ func (m *Model) updateSizes() {
 	}
 }
 
-func (m *Model) countNonShorts(videos []youtube.Video) int {
-	n := 0
-	for _, v := range videos {
-		if v.Duration <= 0 || v.Duration > 60*1e9 {
-			n++
-		}
-	}
-	return n
-}
+
 
 func (m *Model) detailWidth() int {
 	if !m.showDetail {
@@ -808,9 +781,6 @@ func (m Model) renderHeader() string {
 		return statusStyle.Render(fmt.Sprintf("Resolving %s...", m.channelInput))
 	}
 	title := fmt.Sprintf("yt-browse: %s (%s)", m.channel.Handle, m.channel.Title)
-	if (m.activeView == viewVideos || m.activeView == viewPlaylistVideos) && m.hideShorts {
-		title += helpDescStyle.Render("  [hiding shorts]")
-	}
 	return headerStyle.Render(title)
 }
 
@@ -837,15 +807,11 @@ func (m Model) renderTabBar() string {
 	videoLabel := "Videos"
 	if m.videoLoadState == loadDone {
 		total := len(m.videos)
-		nonShorts := total
-		if m.hideShorts {
-			nonShorts = m.countNonShorts(m.videos)
-		}
 		shown := len(m.videoList.Items())
-		if shown < nonShorts {
-			videoLabel = fmt.Sprintf("Videos (%d/%d)", shown, nonShorts)
+		if shown < total {
+			videoLabel = fmt.Sprintf("Videos (%d/%d)", shown, total)
 		} else {
-			videoLabel = fmt.Sprintf("Videos (%d)", nonShorts)
+			videoLabel = fmt.Sprintf("Videos (%d)", total)
 		}
 	} else if m.videoLoadState == loadLoading {
 		if m.videoTotal > 0 {
@@ -959,7 +925,6 @@ func (m Model) renderHelpBar() string {
 		parts = append(parts, helpItem("d", "ate", m.videoSort == sortByDate))
 		parts = append(parts, helpItem("v", "iews", m.videoSort == sortByViews))
 		parts = append(parts, helpItemMid("d", "u", "ration", m.videoSort == sortByDuration))
-		parts = append(parts, helpItem("s", "horts", m.hideShorts))
 
 	case viewPlaylistVideos:
 		parts = append(parts, helpItem("⌫", " back", false))
@@ -967,7 +932,6 @@ func (m Model) renderHelpBar() string {
 		parts = append(parts, helpItem("d", "ate", m.playlistVideoSort == sortByDate))
 		parts = append(parts, helpItem("v", "iews", m.playlistVideoSort == sortByViews))
 		parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration))
-		parts = append(parts, helpItem("s", "horts", m.hideShorts))
 	}
 
 	parts = append(parts, helpItem("?", " help", false))
@@ -1000,7 +964,6 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, row("d", "Sort by date (toggle)"))
 	lines = append(lines, row("v", "Sort by views (toggle)"))
 	lines = append(lines, row("u", "Sort by duration (toggle)"))
-	lines = append(lines, row("s", "Toggle shorts visibility"))
 	lines = append(lines, "")
 	lines = append(lines, helpOverlayTitleStyle.Render("Other"))
 	lines = append(lines, row("r", "Refresh data from API"))
