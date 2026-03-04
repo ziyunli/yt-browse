@@ -66,9 +66,9 @@ func (d *highlightDelegate) Render(w io.Writer, m list.Model, index int, item li
 	isSelected := index == m.Index()
 
 	// Compute match indices if filter is active
-	var matchedRunes []int
+	var titleMatches []int
 	if d.filter.text != "" {
-		matchedRunes = computeTitleMatches(title, d.filter.text, d.filter.mode)
+		titleMatches = computeMatches(title, d.filter.text, d.filter.mode)
 	}
 
 	isFlashed := d.filter.flashOn && d.filter.flashIndex == index
@@ -79,18 +79,18 @@ func (d *highlightDelegate) Render(w io.Writer, m list.Model, index int, item li
 		title = greenTitle.Render(title)
 		desc = greenDesc.Render(desc)
 	} else if isSelected {
-		if len(matchedRunes) > 0 {
+		if len(titleMatches) > 0 {
 			unmatched := s.SelectedTitle.Inline(true)
 			matched := unmatched.Inherit(s.FilterMatch)
-			title = lipgloss.StyleRunes(title, matchedRunes, matched, unmatched)
+			title = lipgloss.StyleRunes(title, titleMatches, matched, unmatched)
 		}
 		title = s.SelectedTitle.Render(title)
 		desc = s.SelectedDesc.Render(desc)
 	} else {
-		if len(matchedRunes) > 0 {
+		if len(titleMatches) > 0 {
 			unmatched := s.NormalTitle.Inline(true)
 			matched := unmatched.Inherit(s.FilterMatch)
-			title = lipgloss.StyleRunes(title, matchedRunes, matched, unmatched)
+			title = lipgloss.StyleRunes(title, titleMatches, matched, unmatched)
 		}
 		title = s.NormalTitle.Render(title)
 		desc = s.NormalDesc.Render(desc)
@@ -103,8 +103,8 @@ func (d *highlightDelegate) Render(w io.Writer, m list.Model, index int, item li
 	fmt.Fprintf(w, "%s", title)
 }
 
-// computeTitleMatches returns rune indices in title that match the query.
-func computeTitleMatches(title, query string, mode filterMode) []int {
+// computeMatches returns rune indices in title that match the query.
+func computeMatches(title, query string, mode filterMode) []int {
 	switch mode {
 	case filterExact:
 		titleLower := strings.ToLower(title)

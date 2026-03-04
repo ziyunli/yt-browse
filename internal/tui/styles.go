@@ -70,8 +70,8 @@ var (
 
 	// Flash message
 	flashStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#00FF00")).
-		Bold(true)
+			Foreground(lipgloss.Color("#00FF00")).
+			Bold(true)
 
 	// Error
 	errorStyle = lipgloss.NewStyle().
@@ -90,7 +90,7 @@ var (
 
 	helpOverlayKeyStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FF6600")).
-				Width(14)
+				Width(16)
 
 	helpOverlayDescStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#CCCCCC"))

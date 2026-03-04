@@ -64,8 +64,8 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("esc", "clear filter"),
 		),
 		ToggleFilterMode: key.NewBinding(
-			key.WithKeys("ctrl+f"),
-			key.WithHelp("ctrl+f", "toggle fuzzy/exact"),
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "toggle fuzzy/exact"),
 		),
 		SortDate: key.NewBinding(
 			key.WithKeys("d"),

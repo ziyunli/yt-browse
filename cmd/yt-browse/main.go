@@ -39,8 +39,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Clean expired cache entries on startup
+	// Clean expired cache entries on startup and enforce size limit
 	_ = cacheStore.CleanExpired()
+	_ = cacheStore.PurgeOverSize()
 
 	// Recent channels store lives next to the cache dir
 	recentPath := filepath.Join(filepath.Dir(cfg.CacheDir), "recent_channels.json")

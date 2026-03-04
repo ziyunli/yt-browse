@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/nroyalty/yt-browse/internal/cache"
 	"github.com/nroyalty/yt-browse/internal/config"
@@ -87,11 +87,11 @@ type Model struct {
 	keys     keyMap
 
 	// Recent channels
-	recentStore    *recent.Store
-	pickerMode     bool
+	recentStore     *recent.Store
+	pickerMode      bool
 	pickerResolving bool
-	pickerList     list.Model
-	pickerInput    textinput.Model
+	pickerList      list.Model
+	pickerInput     textinput.Model
 
 	// Channel
 	channelInput string
@@ -122,24 +122,24 @@ type Model struct {
 	videoCancel     context.CancelFunc
 
 	// Playlist videos (drill-in)
-	currentPlaylist         *youtube.Playlist
-	playlistVideoList       list.Model
-	playlistVideoLoadState  loadState
-	playlistVideos          []youtube.Video
-	playlistVideoSort       sortField
-	playlistVideoSortDir    sortDir
+	currentPlaylist        *youtube.Playlist
+	playlistVideoList      list.Model
+	playlistVideoLoadState loadState
+	playlistVideos         []youtube.Video
+	playlistVideoSort      sortField
+	playlistVideoSortDir   sortDir
 
 	// Filter: we manage our own filter instead of using the list's built-in one
 	filterInput        textinput.Model
-	filtering          bool       // is the filter input active/focused
-	filterText         string     // the applied filter text (persists after closing input)
-	filterMode         filterMode // fuzzy or exact
+	filtering          bool         // is the filter input active/focused
+	filterText         string       // the applied filter text (persists after closing input)
+	filterMode         filterMode   // fuzzy or exact
 	fstate             *filterState // shared with delegate for match highlighting
-	sortOverridesFuzzy bool       // user manually changed sort while fuzzy filter is active
+	sortOverridesFuzzy bool         // user manually changed sort while fuzzy filter is active
 
 	// Detail
-	detailViewport  viewport.Model
-	showDetail      bool
+	detailViewport viewport.Model
+	showDetail     bool
 
 	// Help overlay
 	showHelp bool
@@ -205,27 +205,27 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 	vp := viewport.New()
 
 	return Model{
-		cfg:            cfg,
-		ytClient:       ytClient,
-		cache:          cacheStore,
-		keys:           defaultKeyMap(),
-		recentStore:    recentStore,
-		pickerMode:     channelInput == "",
-		pickerList:     pickerList,
-		pickerInput:    pi,
-		channelInput:   channelInput,
-		activeView:     viewVideos,
+		cfg:               cfg,
+		ytClient:          ytClient,
+		cache:             cacheStore,
+		keys:              defaultKeyMap(),
+		recentStore:       recentStore,
+		pickerMode:        channelInput == "",
+		pickerList:        pickerList,
+		pickerInput:       pi,
+		channelInput:      channelInput,
+		activeView:        viewVideos,
 		playlistList:      playlistList,
 		videoList:         videoList,
 		playlistVideoList: playlistVideoList,
 		filterInput:       fi,
-		filterMode:     filterFuzzy,
-		fstate:         fs,
-		detailViewport: vp,
-		showDetail:     true,
-		playlistSort:   sortNone,
-		videoSort:      sortByDate,
-		videoSortDir:   sortDesc,
+		filterMode:        filterFuzzy,
+		fstate:            fs,
+		detailViewport:    vp,
+		showDetail:        true,
+		playlistSort:      sortNone,
+		videoSort:         sortByDate,
+		videoSortDir:      sortDesc,
 	}
 }
 
@@ -333,6 +333,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.filterText != "" {
 				m.applyFilterAndSort()
+				m.updateDetail()
 			}
 			return m, nil
 
@@ -652,11 +653,21 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.updateDetail()
 		m.updateSizes() // filter bar may have changed visibility
 		return m, nil
-	case msg.String() == "esc":
+	case msg.String() == "esc", msg.String() == "ctrl+c":
 		// Cancel: revert to previous filter text
 		m.filtering = false
 		m.filterInput.Blur()
 		m.filterInput.SetValue(m.filterText)
+		m.updateSizes()
+		return m, nil
+	case msg.String() == "backspace" && m.filterInput.Value() == "":
+		// Empty filter + backspace: exit filter mode
+		m.filterText = ""
+		m.filtering = false
+		m.filterInput.Blur()
+		m.sortOverridesFuzzy = false
+		m.applyFilterAndSort()
+		m.updateDetail()
 		m.updateSizes()
 		return m, nil
 	case key.Matches(msg, m.keys.ToggleFilterMode):
@@ -684,8 +695,10 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // applyFilterAndSort is the core pipeline: raw data → sort → filter → SetItems
 func (m *Model) applyFilterAndSort() {
-	// Sync filter state to the delegate for match highlighting
-	m.fstate.text = m.filterText
+	// Sync filter state to the delegate for match highlighting.
+	// Strip date keywords so they don't produce garbage highlights.
+	cleanText, _, _ := extractDateFilters(m.filterText)
+	m.fstate.text = cleanText
 	m.fstate.mode = m.filterMode
 
 	// In fuzzy mode, relevance ranking wins over explicit sort — unless
@@ -1192,7 +1205,7 @@ func (m *Model) updateDetail() {
 		m.detailViewport.SetContent("")
 		return
 	}
-	content := renderDetail(selected, m.detailWidth())
+	content := renderDetail(selected, m.detailWidth(), m.fstate)
 	m.detailViewport.SetContent(content)
 }
 
@@ -1241,8 +1254,6 @@ func (m *Model) updateSizes() {
 		m.playlistVideoList.SetHeight(contentHeight)
 	}
 }
-
-
 
 func (m *Model) detailWidth() int {
 	if !m.showDetail {
@@ -1357,7 +1368,7 @@ func (m Model) renderTabBar() string {
 func (m Model) renderFilterBar() string {
 	modeLabel := m.filterMode.String()
 
-	modeHint := filterModeStyle.Render("["+modeLabel+" · ctrl+f to change]")
+	modeHint := filterModeStyle.Render("[" + modeLabel + " · ctrl+t to change]")
 
 	if m.filtering {
 		return m.filterInput.View() + "  " + modeHint
@@ -1366,7 +1377,7 @@ func (m Model) renderFilterBar() string {
 	// Show applied filter (not actively editing)
 	return filterPromptStyle.Render("/ ") +
 		filterTextStyle.Render(m.filterText) +
-		"  " + filterModeStyle.Render("["+modeLabel+"]") +
+		"  " + modeHint +
 		"  " + helpDescStyle.Render("(esc to clear)")
 }
 
@@ -1382,7 +1393,11 @@ func (m Model) renderContent() string {
 	case viewVideos:
 		if m.videoLoadState == loadLoading && len(m.videos) == 0 {
 			if m.videoTotal > 0 {
-				listView = statusStyle.Render(fmt.Sprintf("  Loading videos (%d/%d)...", m.videoLoaded, m.videoTotal))
+				line := fmt.Sprintf("  Loading videos (%d/%d)...", m.videoLoaded, m.videoTotal)
+				if m.videoTotal > 500 {
+					line += "\n" + fmt.Sprintf("  This may take a bit, but results are cached for %s", formatTTL(m.cfg.CacheTTL))
+				}
+				listView = statusStyle.Render(line)
 			} else {
 				listView = statusStyle.Render("  Loading videos...")
 			}
@@ -1401,8 +1416,21 @@ func (m Model) renderContent() string {
 		return listView
 	}
 
+	// Ensure the list side doesn't collapse when empty/no matches
+	minListWidth := m.width / 3
+	if lipgloss.Width(listView) < minListWidth {
+		listView = lipgloss.NewStyle().Width(minListWidth).Render(listView)
+	}
 	detail := detailBorderStyle.Render(m.detailViewport.View())
 	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detail)
+}
+
+// formatTTL renders a duration as a human-friendly string (e.g. "24h", "30m").
+func formatTTL(d time.Duration) string {
+	if h := int(d.Hours()); h > 0 && d == time.Duration(h)*time.Hour {
+		return fmt.Sprintf("%dh", h)
+	}
+	return d.String()
 }
 
 // sortIndicator returns ↓ or ↑ for the given direction.
@@ -1471,7 +1499,7 @@ func (m Model) renderHelpBar() string {
 }
 
 func (m Model) renderHelpOverlay() string {
-	title := helpOverlayTitleStyle.Render("Keybindings")
+	title := helpOverlayTitleStyle.Render("yt-browse keybindings")
 
 	row := func(k, desc string) string {
 		return helpOverlayKeyStyle.Render(k) + helpOverlayDescStyle.Render(desc)
@@ -1491,8 +1519,8 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, helpOverlayTitleStyle.Render("Filter & Sort"))
 	lines = append(lines, row("/", "Start filtering"))
 	lines = append(lines, row("esc", "Clear filter"))
-	lines = append(lines, row("ctrl+f", "Cycle filter mode (fuzzy/exact/words/regex)"))
-	lines = append(lines, row("before:/after:", "Date filter (YYYY, YYYY-MM, YYYY-MM-DD)"))
+	lines = append(lines, row("ctrl+t", "Cycle filter mode (fuzzy/exact/words/regex)"))
+	lines = append(lines, row("before/after:", "Date filter (YYYY, YYYY-MM, YYYY-MM-DD)"))
 	lines = append(lines, row("d / D", "Sort by date (newest / oldest)"))
 	lines = append(lines, row("v / V", "Sort by views (most / fewest)"))
 	lines = append(lines, row("u / U", "Sort by duration (longest / shortest)"))

@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-func renderDetail(item list.Item, width int) string {
+func renderDetail(item list.Item, width int, filter *filterState) string {
 	if item == nil {
 		return ""
 	}
@@ -21,6 +21,26 @@ func renderDetail(item list.Item, width int) string {
 			return lipgloss.Wrap(s, width, "")
 		}
 		return s
+	}
+
+	highlightDesc := func(s string) string {
+		wrapped := wrap(s)
+		if filter == nil || filter.text == "" || filter.mode == filterFuzzy {
+			return detailValueStyle.Render(wrapped)
+		}
+		// Highlight line by line to preserve newlines
+		lines := strings.Split(wrapped, "\n")
+		for i, line := range lines {
+			matches := computeMatches(line, filter.text, filter.mode)
+			if len(matches) > 0 {
+				unmatched := detailValueStyle.Inline(true)
+				matched := unmatched.Underline(true)
+				lines[i] = lipgloss.StyleRunes(line, matches, matched, unmatched)
+			} else {
+				lines[i] = detailValueStyle.Render(line)
+			}
+		}
+		return strings.Join(lines, "\n")
 	}
 
 	switch v := item.(type) {
@@ -41,7 +61,7 @@ func renderDetail(item list.Item, width int) string {
 			b.WriteString("\n")
 			b.WriteString(detailLabelStyle.Render("Description:"))
 			b.WriteString("\n")
-			b.WriteString(detailValueStyle.Render(wrap(p.Description)))
+			b.WriteString(highlightDesc(p.Description))
 		}
 
 	case VideoItem:
@@ -67,7 +87,7 @@ func renderDetail(item list.Item, width int) string {
 			b.WriteString("\n")
 			b.WriteString(detailLabelStyle.Render("Description:"))
 			b.WriteString("\n")
-			b.WriteString(detailValueStyle.Render(wrap(vid.Description)))
+			b.WriteString(highlightDesc(vid.Description))
 		}
 	}
 
