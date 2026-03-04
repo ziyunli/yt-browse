@@ -649,6 +649,7 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filtering = false
 		m.filterInput.Blur()
 		m.applyFilterAndSort()
+		m.updateDetail()
 		m.updateSizes() // filter bar may have changed visibility
 		return m, nil
 	case msg.String() == "esc":
@@ -667,6 +668,7 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.filterText = m.filterInput.Value()
 		m.applyFilterAndSort()
+		m.updateDetail()
 		return m, nil
 	default:
 		// Forward to textinput
@@ -675,6 +677,7 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Live-filter as user types
 		m.filterText = m.filterInput.Value()
 		m.applyFilterAndSort()
+		m.updateDetail()
 		return m, cmd
 	}
 }
@@ -776,12 +779,96 @@ func (m *Model) sortedVideoItems(videos []youtube.Video, sortBy sortField, dir s
 	return items
 }
 
+// extractDateFilters parses before:/after: tokens from the query string,
+// returning the remaining text and any parsed time boundaries.
+// Supported formats: YYYY, YYYY-MM, YYYY-MM-DD.
+func extractDateFilters(query string) (string, *time.Time, *time.Time) {
+	var before, after *time.Time
+	var remaining []string
+
+	for _, token := range strings.Fields(query) {
+		lower := strings.ToLower(token)
+		if strings.HasPrefix(lower, "before:") || strings.HasPrefix(lower, "after:") {
+			prefix := lower[:strings.Index(lower, ":")+1]
+			dateStr := token[len(prefix):]
+			if t, ok := parseDateBestEffort(dateStr); ok {
+				if prefix == "before:" {
+					before = &t
+				} else {
+					after = &t
+				}
+			}
+			// Always consume date-prefixed tokens — never pass to text filter,
+			// even if the date is incomplete (e.g. "after:201" while typing).
+			continue
+		}
+		remaining = append(remaining, token)
+	}
+
+	return strings.Join(remaining, " "), before, after
+}
+
+// parseDateBestEffort tries to parse s as YYYY, YYYY-MM, or YYYY-MM-DD.
+// If the exact string doesn't parse (e.g. "2015-0" while typing "2015-06"),
+// it truncates to the longest valid format length so the previous valid date
+// stays active while the user is still typing.
+func parseDateBestEffort(s string) (time.Time, bool) {
+	formats := []struct {
+		layout string
+		length int
+	}{
+		{"2006-01-02", 10},
+		{"2006-01", 7},
+		{"2006", 4},
+	}
+	for _, f := range formats {
+		if len(s) >= f.length {
+			if t, err := time.Parse(f.layout, s[:f.length]); err == nil {
+				return t, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+// itemDate returns the publish date for a list item (VideoItem or PlaylistItem).
+func itemDate(item list.Item) time.Time {
+	switch it := item.(type) {
+	case VideoItem:
+		return it.video.PublishedAt
+	case PlaylistItem:
+		return it.playlist.PublishedAt
+	}
+	return time.Time{}
+}
+
 func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 	if m.filterText == "" {
 		return items
 	}
 
-	query := m.filterText
+	query, before, after := extractDateFilters(m.filterText)
+
+	// Apply date filters first
+	if before != nil || after != nil {
+		var dated []list.Item
+		for _, item := range items {
+			d := itemDate(item)
+			if before != nil && !d.Before(*before) {
+				continue
+			}
+			if after != nil && d.Before(*after) {
+				continue
+			}
+			dated = append(dated, item)
+		}
+		items = dated
+	}
+
+	// If only date filters (no text remaining), return now
+	if query == "" {
+		return items
+	}
 
 	switch m.filterMode {
 	case filterExact:
@@ -1405,6 +1492,7 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, row("/", "Start filtering"))
 	lines = append(lines, row("esc", "Clear filter"))
 	lines = append(lines, row("ctrl+f", "Cycle filter mode (fuzzy/exact/words/regex)"))
+	lines = append(lines, row("before:/after:", "Date filter (YYYY, YYYY-MM, YYYY-MM-DD)"))
 	lines = append(lines, row("d / D", "Sort by date (newest / oldest)"))
 	lines = append(lines, row("v / V", "Sort by views (most / fewest)"))
 	lines = append(lines, row("u / U", "Sort by duration (longest / shortest)"))
