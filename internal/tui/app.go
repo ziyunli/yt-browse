@@ -128,11 +128,12 @@ type Model struct {
 	playlistVideoSortDir    sortDir
 
 	// Filter: we manage our own filter instead of using the list's built-in one
-	filterInput textinput.Model
-	filtering   bool       // is the filter input active/focused
-	filterText  string     // the applied filter text (persists after closing input)
-	filterMode  filterMode // fuzzy or exact
-	fstate      *filterState // shared with delegate for match highlighting
+	filterInput        textinput.Model
+	filtering          bool       // is the filter input active/focused
+	filterText         string     // the applied filter text (persists after closing input)
+	filterMode         filterMode // fuzzy or exact
+	fstate             *filterState // shared with delegate for match highlighting
+	sortOverridesFuzzy bool       // user manually changed sort while fuzzy filter is active
 
 	// Detail
 	detailViewport  viewport.Model
@@ -207,7 +208,7 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 		pickerList:     pickerList,
 		pickerInput:    pi,
 		channelInput:   channelInput,
-		activeView:     viewPlaylists,
+		activeView:     viewVideos,
 		playlistList:      playlistList,
 		videoList:         videoList,
 		playlistVideoList: playlistVideoList,
@@ -292,6 +293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.filterText != "" {
 				m.filterText = ""
+				m.sortOverridesFuzzy = false
 				m.applyFilterAndSort()
 				m.updateSizes() // filter bar disappeared
 			}
@@ -651,23 +653,27 @@ func (m *Model) applyFilterAndSort() {
 	m.fstate.text = m.filterText
 	m.fstate.mode = m.filterMode
 
+	// In fuzzy mode, relevance ranking wins over explicit sort — unless
+	// the user manually toggled a sort while the fuzzy filter was active.
+	useFuzzyRanking := m.filterText != "" && m.filterMode == filterFuzzy && !m.sortOverridesFuzzy
+
 	switch m.activeView {
 	case viewPlaylists:
 		items := m.sortedPlaylistItems()
 		if m.filterText != "" {
-			items = m.filterItems(items, m.playlistSort != sortNone)
+			items = m.filterItems(items, !useFuzzyRanking)
 		}
 		m.playlistList.SetItems(items)
 	case viewVideos:
 		items := m.sortedVideoItems(m.videos, m.videoSort, m.videoSortDir)
 		if m.filterText != "" {
-			items = m.filterItems(items, m.videoSort != sortNone)
+			items = m.filterItems(items, !useFuzzyRanking)
 		}
 		m.videoList.SetItems(items)
 	case viewPlaylistVideos:
 		items := m.sortedVideoItems(m.playlistVideos, m.playlistVideoSort, m.playlistVideoSortDir)
 		if m.filterText != "" {
-			items = m.filterItems(items, m.playlistVideoSort != sortNone)
+			items = m.filterItems(items, !useFuzzyRanking)
 		}
 		m.playlistVideoList.SetItems(items)
 	}
@@ -784,10 +790,16 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 		return filtered
 
 	default:
-		// Fuzzy match using sahilm/fuzzy
+		// Fuzzy match against title only — matching the full FilterValue
+		// (title + description) produces poor relevance ranking because
+		// long descriptions cause false high-score matches.
 		targets := make([]string, len(items))
 		for i, item := range items {
-			targets[i] = item.FilterValue()
+			if di, ok := item.(interface{ Title() string }); ok {
+				targets[i] = di.Title()
+			} else {
+				targets[i] = item.FilterValue()
+			}
 		}
 
 		matches := fuzzy.Find(query, targets)
@@ -852,9 +864,17 @@ func (m *Model) toggleSort(field sortField, dir sortDir) {
 	sd := m.activeSortDir()
 	if *sf == field && *sd == dir {
 		*sf = sortNone
+		// Toggling sort off while fuzzy filtering → back to relevance
+		if m.filterText != "" && m.filterMode == filterFuzzy {
+			m.sortOverridesFuzzy = false
+		}
 	} else {
 		*sf = field
 		*sd = dir
+		// User explicitly chose a sort while fuzzy filtering → override relevance
+		if m.filterText != "" && m.filterMode == filterFuzzy {
+			m.sortOverridesFuzzy = true
+		}
 	}
 }
 
@@ -909,6 +929,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.playlistVideoSort = sortNone
 		m.filterText = ""
 		m.fstate.text = ""
+		m.sortOverridesFuzzy = false
 		m.playlistVideoList.SetItems(nil)
 		m.updateSizes()
 		return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, p.ID, p.ChannelID, false)
@@ -945,6 +966,7 @@ func (m *Model) handleBack() (tea.Model, tea.Cmd) {
 	m.playlistVideoSort = sortNone
 	m.filterText = ""
 	m.fstate.text = ""
+	m.sortOverridesFuzzy = false
 	m.applyFilterAndSort()
 	m.updateDetail()
 	m.updateSizes()
