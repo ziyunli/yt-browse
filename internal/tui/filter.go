@@ -11,21 +11,6 @@ import (
 // filter mode. For regex mode, compiledRe must be non-nil. Returns nil on no match.
 func matchIndices(text, query string, mode filterMode, compiledRe *regexp.Regexp) []int {
 	switch mode {
-	case filterExact:
-		titleLower := strings.ToLower(text)
-		queryLower := strings.ToLower(query)
-		idx := strings.Index(titleLower, queryLower)
-		if idx < 0 {
-			return nil
-		}
-		runeOffset := len([]rune(titleLower[:idx]))
-		queryRuneLen := len([]rune(query))
-		indices := make([]int, queryRuneLen)
-		for i := range indices {
-			indices[i] = runeOffset + i
-		}
-		return indices
-
 	case filterWords:
 		titleLower := strings.ToLower(text)
 		words := strings.Fields(strings.ToLower(query))

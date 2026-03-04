@@ -59,19 +59,16 @@ type filterMode int
 
 const (
 	filterFuzzy filterMode = iota
-	filterExact
 	filterWords
 	filterRegex
 )
 
-var filterModes = []filterMode{filterFuzzy, filterExact, filterWords, filterRegex}
+var filterModes = []filterMode{filterWords, filterRegex, filterFuzzy}
 
 func (fm filterMode) String() string {
 	switch fm {
 	case filterFuzzy:
 		return "fuzzy"
-	case filterExact:
-		return "exact"
 	case filterWords:
 		return "words"
 	case filterRegex:
@@ -135,7 +132,6 @@ type Model struct {
 	filterText         string       // the applied filter text (persists after closing input)
 	filterMode         filterMode   // fuzzy or exact
 	fstate             *filterState // shared with delegate for match highlighting
-	sortOverridesFuzzy bool         // user manually changed sort while fuzzy filter is active
 	filterTitlesOnly   bool         // only search titles (not descriptions) in non-fuzzy modes
 	filterSeq          int          // incremented on each keystroke; debounce checks for staleness
 	savedFilterText    string       // preserved playlist filter during drill-in
@@ -222,7 +218,7 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 		videoList:         videoList,
 		playlistVideoList: playlistVideoList,
 		filterInput:       fi,
-		filterMode:        filterFuzzy,
+		filterMode:        filterWords,
 		fstate:            fs,
 		detailViewport:    vp,
 		showDetail:        true,
@@ -306,7 +302,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.filterText != "" {
 				m.filterText = ""
-				m.sortOverridesFuzzy = false
 				m.applyFilterAndSort()
 				m.updateSizes() // filter bar disappeared
 			}
@@ -358,70 +353,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			return m.handleEnter()
 
-		case key.Matches(msg, m.keys.SortDate):
-			m.toggleSort(sortByDate, sortDesc)
-			m.applyFilterAndSort()
-			m.updateDetail()
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortDateRev):
-			m.toggleSort(sortByDate, sortAsc)
-			m.applyFilterAndSort()
-			m.updateDetail()
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortViews):
-			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
+		case key.Matches(msg, m.keys.SortDate),
+			key.Matches(msg, m.keys.SortDateRev),
+			key.Matches(msg, m.keys.SortViews),
+			key.Matches(msg, m.keys.SortViewsRev),
+			key.Matches(msg, m.keys.SortDuration),
+			key.Matches(msg, m.keys.SortDurationRev),
+			key.Matches(msg, m.keys.SortCount),
+			key.Matches(msg, m.keys.SortCountRev):
+			// Sorting disabled during fuzzy filter — fuzzy results are relevance-ranked
+			if m.filterText != "" && m.filterMode == filterFuzzy {
+				return m, nil
+			}
+			switch {
+			case key.Matches(msg, m.keys.SortDate):
+				m.toggleSort(sortByDate, sortDesc)
+			case key.Matches(msg, m.keys.SortDateRev):
+				m.toggleSort(sortByDate, sortAsc)
+			case key.Matches(msg, m.keys.SortViews):
+				if m.activeView != viewVideos && m.activeView != viewPlaylistVideos {
+					return m, nil
+				}
 				m.toggleSort(sortByViews, sortDesc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortViewsRev):
-			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
+			case key.Matches(msg, m.keys.SortViewsRev):
+				if m.activeView != viewVideos && m.activeView != viewPlaylistVideos {
+					return m, nil
+				}
 				m.toggleSort(sortByViews, sortAsc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortDuration):
-			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
+			case key.Matches(msg, m.keys.SortDuration):
+				if m.activeView != viewVideos && m.activeView != viewPlaylistVideos {
+					return m, nil
+				}
 				m.toggleSort(sortByDuration, sortDesc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortDurationRev):
-			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
+			case key.Matches(msg, m.keys.SortDurationRev):
+				if m.activeView != viewVideos && m.activeView != viewPlaylistVideos {
+					return m, nil
+				}
 				m.toggleSort(sortByDuration, sortAsc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortCount):
-			if m.activeView == viewPlaylists {
+			case key.Matches(msg, m.keys.SortCount):
+				if m.activeView != viewPlaylists {
+					return m, nil
+				}
 				m.toggleSort(sortByCount, sortDesc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.SortCountRev):
-			if m.activeView == viewPlaylists {
+			case key.Matches(msg, m.keys.SortCountRev):
+				if m.activeView != viewPlaylists {
+					return m, nil
+				}
 				m.toggleSort(sortByCount, sortAsc)
-				m.applyFilterAndSort()
-				m.updateDetail()
-				return m, nil
 			}
+			m.applyFilterAndSort()
+			m.updateDetail()
 			return m, nil
 
 		case key.Matches(msg, m.keys.Refresh):
@@ -694,7 +675,6 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.filterText = ""
 		m.filtering = false
 		m.filterInput.Blur()
-		m.sortOverridesFuzzy = false
 		m.applyFilterAndSort()
 		m.updateDetail()
 		m.updateSizes()
@@ -754,9 +734,8 @@ func (m *Model) applyFilterAndSort() {
 		m.fstate.regexError = false
 	}
 
-	// In fuzzy mode, relevance ranking wins over explicit sort — unless
-	// the user manually toggled a sort while the fuzzy filter was active.
-	useFuzzyRanking := m.filterText != "" && m.filterMode == filterFuzzy && !m.sortOverridesFuzzy
+	// In fuzzy mode, relevance ranking always wins (sorting is disabled).
+	useFuzzyRanking := m.filterText != "" && m.filterMode == filterFuzzy
 
 	switch m.activeView {
 	case viewPlaylists:
@@ -948,15 +927,6 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 	}
 
 	switch m.filterMode {
-	case filterExact:
-		var filtered []list.Item
-		for _, item := range items {
-			if matchIndices(searchText(item), query, filterExact, nil) != nil {
-				filtered = append(filtered, item)
-			}
-		}
-		return filtered
-
 	case filterWords:
 		// All words must appear (case-insensitive, any order).
 		// matchIndices does best-effort per-word highlighting, but filtering
@@ -1005,13 +975,7 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 		}
 
 		matches := fuzzy.Find(query, targets)
-		if preserveOrder {
-			// Sort matches by original index to preserve our sort order
-			sort.Slice(matches, func(i, j int) bool {
-				return matches[i].Index < matches[j].Index
-			})
-		}
-		// When !preserveOrder, keep fuzzy relevance ranking
+		// Fuzzy results are always relevance-ranked (sorting is disabled in fuzzy mode)
 		filtered := make([]list.Item, len(matches))
 		for i, match := range matches {
 			filtered[i] = items[match.Index]
@@ -1066,17 +1030,9 @@ func (m *Model) toggleSort(field sortField, dir sortDir) {
 	sd := m.activeSortDir()
 	if *sf == field && *sd == dir {
 		*sf = sortNone
-		// Toggling sort off while fuzzy filtering → back to relevance
-		if m.filterText != "" && m.filterMode == filterFuzzy {
-			m.sortOverridesFuzzy = false
-		}
 	} else {
 		*sf = field
 		*sd = dir
-		// User explicitly chose a sort while fuzzy filtering → override relevance
-		if m.filterText != "" && m.filterMode == filterFuzzy {
-			m.sortOverridesFuzzy = true
-		}
 	}
 }
 
@@ -1132,7 +1088,6 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.savedFilterText = m.filterText
 		m.filterText = ""
 		m.fstate.text = ""
-		m.sortOverridesFuzzy = false
 		m.playlistVideoList.SetItems(nil)
 		m.updateSizes()
 		return m, fetchPlaylistVideosCmd(m.ytClient, m.cache, p.ID, p.ChannelID, false)
@@ -1203,7 +1158,6 @@ func (m *Model) handleBack() (tea.Model, tea.Cmd) {
 	m.filterText = m.savedFilterText
 	m.fstate.text = m.savedFilterText
 	m.savedFilterText = ""
-	m.sortOverridesFuzzy = false
 	m.applyFilterAndSort()
 	m.updateDetail()
 	m.updateSizes()
@@ -1545,6 +1499,8 @@ func (m Model) renderHelpBar() string {
 	var parts []string
 	sep := helpDescStyle.Render(" · ")
 
+	fuzzyActive := m.filterText != "" && m.filterMode == filterFuzzy
+
 	parts = append(parts, helpItem("q", "uit", false, sortDesc))
 	parts = append(parts, helpItem("?", " help", false, sortDesc))
 	parts = append(parts, helpItem("/", "filter", false, sortDesc))
@@ -1558,24 +1514,30 @@ func (m Model) renderHelpBar() string {
 		parts = append(parts, helpItem("⏎", " view", false, sortDesc))
 		parts = append(parts, helpItem("o", "pen", false, sortDesc))
 		parts = append(parts, helpItem("y", "ank", false, sortDesc))
-		parts = append(parts, helpItem("d", "ate", m.playlistSort == sortByDate, m.playlistSortDir))
-		parts = append(parts, helpItem("c", "ount", m.playlistSort == sortByCount, m.playlistSortDir))
+		if !fuzzyActive {
+			parts = append(parts, helpItem("d", "ate", m.playlistSort == sortByDate, m.playlistSortDir))
+			parts = append(parts, helpItem("c", "ount", m.playlistSort == sortByCount, m.playlistSortDir))
+		}
 
 	case viewVideos:
 		parts = append(parts, helpItem("tab", " switch", false, sortDesc))
 		parts = append(parts, helpItem("⏎", " open", false, sortDesc))
 		parts = append(parts, helpItem("y", "ank", false, sortDesc))
-		parts = append(parts, helpItem("d", "ate", m.videoSort == sortByDate, m.videoSortDir))
-		parts = append(parts, helpItem("v", "iews", m.videoSort == sortByViews, m.videoSortDir))
-		parts = append(parts, helpItemMid("d", "u", "ration", m.videoSort == sortByDuration, m.videoSortDir))
+		if !fuzzyActive {
+			parts = append(parts, helpItem("d", "ate", m.videoSort == sortByDate, m.videoSortDir))
+			parts = append(parts, helpItem("v", "iews", m.videoSort == sortByViews, m.videoSortDir))
+			parts = append(parts, helpItemMid("d", "u", "ration", m.videoSort == sortByDuration, m.videoSortDir))
+		}
 
 	case viewPlaylistVideos:
 		parts = append(parts, helpItem("⌫", " back", false, sortDesc))
 		parts = append(parts, helpItem("⏎", " open", false, sortDesc))
 		parts = append(parts, helpItem("y", "ank", false, sortDesc))
-		parts = append(parts, helpItem("d", "ate", m.playlistVideoSort == sortByDate, m.playlistVideoSortDir))
-		parts = append(parts, helpItem("v", "iews", m.playlistVideoSort == sortByViews, m.playlistVideoSortDir))
-		parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration, m.playlistVideoSortDir))
+		if !fuzzyActive {
+			parts = append(parts, helpItem("d", "ate", m.playlistVideoSort == sortByDate, m.playlistVideoSortDir))
+			parts = append(parts, helpItem("v", "iews", m.playlistVideoSort == sortByViews, m.playlistVideoSortDir))
+			parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration, m.playlistVideoSortDir))
+		}
 	}
 
 	return " " + strings.Join(parts, sep)
@@ -1602,7 +1564,7 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, helpOverlayTitleStyle.Render("Filter & Sort"))
 	lines = append(lines, row("/", "Start filtering"))
 	lines = append(lines, row("esc", "Clear filter"))
-	lines = append(lines, row("ctrl+t", "Cycle filter mode (fuzzy/exact/words/regex)"))
+	lines = append(lines, row("ctrl+t", "Cycle filter mode (words/regex/fuzzy)"))
 	lines = append(lines, row("ctrl+d", "Toggle title-only / title+description search"))
 	lines = append(lines, row("before/after:", "Date filter (YYYY, YYYY-MM, YYYY-MM-DD)"))
 	lines = append(lines, row("d / D", "Sort by date (newest / oldest)"))
