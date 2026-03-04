@@ -105,6 +105,13 @@ func saveRecentCmd(store *recent.Store, ch *youtube.Channel) tea.Cmd {
 	}
 }
 
+func removeRecentCmd(store *recent.Store, id string) tea.Cmd {
+	return func() tea.Msg {
+		store.Remove(id)
+		return recentChannelRemovedMsg{}
+	}
+}
+
 func openURLCmd(url string) tea.Cmd {
 	return func() tea.Msg {
 		var cmd *exec.Cmd

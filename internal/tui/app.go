@@ -186,7 +186,7 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 	pickerList.DisableQuitKeybindings()
 
 	fi := textinput.New()
-	fi.Prompt = "  / "
+	fi.Prompt = "  /"
 	styles := fi.Styles()
 	styles.Focused.Prompt = filterPromptStyle
 	styles.Focused.Text = filterTextStyle
@@ -260,6 +260,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pickerList.SetItems(items)
 		m.updateSizes()
+		return m, nil
+
+	case recentChannelRemovedMsg:
+		m.filterPickerList()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -597,6 +601,13 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if input := strings.TrimSpace(m.pickerInput.Value()); input != "" {
 			m.channelInput = input
 			return m.resolvePickerChannel()
+		}
+		return m, nil
+	case "ctrl+backspace":
+		// Remove selected item from recent channels
+		if selected := m.pickerList.SelectedItem(); selected != nil {
+			ri := selected.(RecentItem)
+			return m, removeRecentCmd(m.recentStore, ri.entry.ID)
 		}
 		return m, nil
 	case "up", "shift+tab", "ctrl+k", "ctrl+p":
@@ -1309,12 +1320,20 @@ func (m Model) renderPickerView() tea.View {
 	sep := helpDescStyle.Render(" · ")
 	helpLine := helpKeyStyle.Render("enter") + helpDescStyle.Render(" select") +
 		sep +
-		helpKeyStyle.Render("ctrl+o") + helpDescStyle.Render(" lookup as channel") +
+		helpKeyStyle.Render("ctrl+o") + helpDescStyle.Render(" lookup") +
+		sep +
+		helpKeyStyle.Render("ctrl+bksp") + helpDescStyle.Render(" remove") +
 		sep +
 		helpKeyStyle.Render("↑↓") + helpDescStyle.Render(" navigate") +
 		sep +
 		helpKeyStyle.Render("ctrl+c") + helpDescStyle.Render(" quit")
-	sections = append(sections, helpLine)
+
+	// Pin help bar to bottom by filling remaining vertical space.
+	contentHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, sections...))
+	if gap := m.height - contentHeight - 1; gap > 0 {
+		sections = append(sections, strings.Repeat("\n", gap-1))
+	}
+	sections = append(sections, " "+helpLine)
 
 	str := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	v := tea.NewView(str)
@@ -1399,7 +1418,7 @@ func (m Model) renderFilterBar() string {
 
 	if m.filterText != "" {
 		// Show applied filter (not actively editing)
-		return filterPromptStyle.Render("  / ") +
+		return filterPromptStyle.Render("  /") +
 			filterTextStyle.Render(m.filterText) +
 			"  " + modeHint +
 			"  " + helpDescStyle.Render("(esc to clear)")
@@ -1523,7 +1542,7 @@ func (m Model) renderHelpBar() string {
 		parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration, m.playlistVideoSortDir))
 	}
 
-	return strings.Join(parts, sep)
+	return " " + strings.Join(parts, sep)
 }
 
 func (m Model) renderHelpOverlay() string {

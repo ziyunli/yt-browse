@@ -9,11 +9,11 @@ var (
 	activeTabStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#FF6600")).
-			Padding(0, 2)
+			Padding(0, 1)
 
 	inactiveTabStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#888888")).
-				Padding(0, 2)
+				Padding(0, 1)
 
 	// Header
 	headerStyle = lipgloss.NewStyle().

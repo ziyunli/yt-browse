@@ -74,6 +74,22 @@ func (s *Store) Add(id, title, handle string) {
 	}
 
 	// Write (silently ignore errors)
+	s.write(entries)
+}
+
+// Remove deletes the entry with the given ID and writes the updated list.
+func (s *Store) Remove(id string) {
+	entries := s.Load()
+	for i := range entries {
+		if entries[i].ID == id {
+			entries = append(entries[:i], entries[i+1:]...)
+			s.write(entries)
+			return
+		}
+	}
+}
+
+func (s *Store) write(entries []Entry) {
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return
