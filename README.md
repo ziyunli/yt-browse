@@ -13,6 +13,7 @@ The youtube channel search experience is *bad*. You can't limit your search to j
 * Order results by upload date, view count, or video duration
 * Search and order videos *within* a playlist
 * Restrict your search to specific date ranges with `before:` and `after:` filters
+* Copy URLs to your clipboard or open directly in your browser
 * All data is cached; search is instant after an initial (once a day per channel) download
 * Running without arguments lets you pick from recent channels
 
