@@ -4,25 +4,21 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nroyalty/yt-browse/internal/cache"
 	"github.com/nroyalty/yt-browse/internal/config"
+	"github.com/nroyalty/yt-browse/internal/recent"
 	"github.com/nroyalty/yt-browse/internal/tui"
 	"github.com/nroyalty/yt-browse/internal/youtube"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: yt-browse <channel>\n\n")
-		fmt.Fprintf(os.Stderr, "  channel: YouTube handle (@ddrjake), URL, or channel ID\n\n")
-		fmt.Fprintf(os.Stderr, "Examples:\n")
-		fmt.Fprintf(os.Stderr, "  yt-browse @ddrjake\n")
-		fmt.Fprintf(os.Stderr, "  yt-browse https://youtube.com/@ddrjake\n")
-		os.Exit(1)
+	var channelInput string
+	if len(os.Args) >= 2 {
+		channelInput = os.Args[1]
 	}
-
-	channelInput := os.Args[1]
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -46,7 +42,11 @@ func main() {
 	// Clean expired cache entries on startup
 	_ = cacheStore.CleanExpired()
 
-	model := tui.New(cfg, ytClient, cacheStore, channelInput)
+	// Recent channels store lives next to the cache dir
+	recentPath := filepath.Join(filepath.Dir(cfg.CacheDir), "recent_channels.json")
+	recentStore := recent.NewStore(recentPath)
+
+	model := tui.New(cfg, ytClient, cacheStore, recentStore, channelInput)
 	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {

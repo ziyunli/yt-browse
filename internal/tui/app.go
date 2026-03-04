@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/nroyalty/yt-browse/internal/cache"
 	"github.com/nroyalty/yt-browse/internal/config"
+	"github.com/nroyalty/yt-browse/internal/recent"
 	"github.com/nroyalty/yt-browse/internal/youtube"
 	"github.com/sahilm/fuzzy"
 )
@@ -56,13 +58,38 @@ type filterMode int
 const (
 	filterFuzzy filterMode = iota
 	filterExact
+	filterWords
+	filterRegex
 )
+
+var filterModes = []filterMode{filterFuzzy, filterExact, filterWords, filterRegex}
+
+func (fm filterMode) String() string {
+	switch fm {
+	case filterFuzzy:
+		return "fuzzy"
+	case filterExact:
+		return "exact"
+	case filterWords:
+		return "words"
+	case filterRegex:
+		return "regex"
+	}
+	return "fuzzy"
+}
 
 type Model struct {
 	cfg      *config.Config
 	ytClient *youtube.Client
 	cache    *cache.Store
 	keys     keyMap
+
+	// Recent channels
+	recentStore    *recent.Store
+	pickerMode     bool
+	pickerResolving bool
+	pickerList     list.Model
+	pickerInput    textinput.Model
 
 	// Channel
 	channelInput string
@@ -118,7 +145,7 @@ type Model struct {
 	lastError error
 }
 
-func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, channelInput string) Model {
+func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, recentStore *recent.Store, channelInput string) Model {
 	fs := &filterState{}
 	delegate := newHighlightDelegate(fs)
 
@@ -143,12 +170,30 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 	playlistVideoList.SetFilteringEnabled(false)
 	playlistVideoList.DisableQuitKeybindings()
 
+	pickerList := list.New([]list.Item{}, delegate, 0, 0)
+	pickerList.SetShowTitle(false)
+	pickerList.SetShowHelp(false)
+	pickerList.SetShowStatusBar(true)
+	pickerList.SetFilteringEnabled(false)
+	pickerList.DisableQuitKeybindings()
+
 	fi := textinput.New()
 	fi.Prompt = "/ "
 	styles := fi.Styles()
 	styles.Focused.Prompt = filterPromptStyle
 	styles.Focused.Text = filterTextStyle
 	fi.SetStyles(styles)
+
+	pi := textinput.New()
+	pi.Prompt = "> "
+	pi.Placeholder = "Filter or enter new channel"
+	piStyles := pi.Styles()
+	piStyles.Focused.Prompt = filterPromptStyle
+	piStyles.Focused.Text = filterTextStyle
+	pi.SetStyles(piStyles)
+	if channelInput == "" {
+		pi.Focus()
+	}
 
 	vp := viewport.New()
 
@@ -157,6 +202,10 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 		ytClient:       ytClient,
 		cache:          cacheStore,
 		keys:           defaultKeyMap(),
+		recentStore:    recentStore,
+		pickerMode:     channelInput == "",
+		pickerList:     pickerList,
+		pickerInput:    pi,
 		channelInput:   channelInput,
 		activeView:     viewPlaylists,
 		playlistList:      playlistList,
@@ -174,6 +223,12 @@ func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, 
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.pickerMode {
+		// Focus() was already called in New() to set internal state.
+		// Call it again here just to get the cursor blink cmd (Init has a
+		// value receiver so the state change on this copy is harmless).
+		return tea.Batch(m.pickerInput.Focus(), loadRecentCmd(m.recentStore))
+	}
 	return resolveChannelCmd(m.ytClient, m.cache, m.channelInput)
 }
 
@@ -185,10 +240,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateSizes()
-		m.updateDetail()
+		if !m.pickerMode {
+			m.updateDetail()
+		}
+		return m, nil
+
+	case recentChannelsLoadedMsg:
+		items := make([]list.Item, len(msg.entries))
+		for i, e := range msg.entries {
+			items[i] = RecentItem{entry: e}
+		}
+		m.pickerList.SetItems(items)
+		m.updateSizes()
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.pickerMode {
+			return m.handlePickerKey(msg)
+		}
 		// Dismiss help overlay on any key
 		if m.showHelp {
 			m.showHelp = false
@@ -244,10 +313,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.ToggleFilterMode):
-			if m.filterMode == filterFuzzy {
-				m.filterMode = filterExact
-			} else {
-				m.filterMode = filterFuzzy
+			// Cycle through filter modes
+			for i, fm := range filterModes {
+				if fm == m.filterMode {
+					m.filterMode = filterModes[(i+1)%len(filterModes)]
+					break
+				}
 			}
 			if m.filterText != "" {
 				m.applyFilterAndSort()
@@ -315,11 +386,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case channelResolvedMsg:
 		m.channel = msg.channel
+		m.pickerMode = false
 		m.playlistLoadState = loadLoading
-		return m, fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID, false)
+		m.updateSizes()
+		return m, tea.Batch(
+			fetchPlaylistsCmd(m.ytClient, m.cache, m.channel.ID, false),
+			saveRecentCmd(m.recentStore, m.channel),
+		)
 
 	case channelErrorMsg:
 		m.lastError = msg.err
+		if m.pickerMode {
+			m.pickerResolving = false
+		}
 		return m, nil
 
 	case playlistsFetchedMsg:
@@ -390,20 +469,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
-	// Delegate to active list
+	// Delegate to active list or picker input
 	var cmd tea.Cmd
-	switch m.activeView {
-	case viewPlaylists:
-		m.playlistList, cmd = m.playlistList.Update(msg)
-	case viewVideos:
-		m.videoList, cmd = m.videoList.Update(msg)
-	case viewPlaylistVideos:
-		m.playlistVideoList, cmd = m.playlistVideoList.Update(msg)
+	if m.pickerMode {
+		m.pickerInput, cmd = m.pickerInput.Update(msg)
+	} else {
+		switch m.activeView {
+		case viewPlaylists:
+			m.playlistList, cmd = m.playlistList.Update(msg)
+		case viewVideos:
+			m.videoList, cmd = m.videoList.Update(msg)
+		case viewPlaylistVideos:
+			m.playlistVideoList, cmd = m.playlistVideoList.Update(msg)
+		}
+		// Update detail pane
+		m.updateDetail()
 	}
 	cmds = append(cmds, cmd)
-
-	// Update detail pane
-	m.updateDetail()
 
 	return m, tea.Batch(cmds...)
 }
@@ -411,6 +493,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("Loading...")
+	}
+
+	if m.pickerMode {
+		return m.renderPickerView()
 	}
 
 	var sections []string
@@ -438,11 +524,92 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// --- picker handling ---
+
+func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	// Block input while resolving
+	if m.pickerResolving {
+		return m, nil
+	}
+	switch msg.String() {
+	case "enter":
+		// If the list has a selection, pick it
+		if selected := m.pickerList.SelectedItem(); selected != nil {
+			ri := selected.(RecentItem)
+			m.channelInput = ri.entry.Handle
+			if m.channelInput == "" {
+				m.channelInput = ri.entry.ID
+			}
+			return m.resolvePickerChannel()
+		}
+		// No list results — treat input as a new channel lookup
+		if input := strings.TrimSpace(m.pickerInput.Value()); input != "" {
+			m.channelInput = input
+			return m.resolvePickerChannel()
+		}
+		return m, nil
+	case "ctrl+o":
+		// Force lookup: treat input text as a new channel even if list has matches
+		if input := strings.TrimSpace(m.pickerInput.Value()); input != "" {
+			m.channelInput = input
+			return m.resolvePickerChannel()
+		}
+		return m, nil
+	case "up", "shift+tab", "ctrl+k", "ctrl+p":
+		m.pickerList.CursorUp()
+		return m, nil
+	case "down", "tab", "ctrl+j", "ctrl+n":
+		m.pickerList.CursorDown()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.pickerInput, cmd = m.pickerInput.Update(msg)
+		// Live-filter the recent list as user types
+		m.filterPickerList()
+		return m, cmd
+	}
+}
+
+func (m *Model) resolvePickerChannel() (tea.Model, tea.Cmd) {
+	m.pickerResolving = true
+	m.lastError = nil
+	return m, resolveChannelCmd(m.ytClient, m.cache, m.channelInput)
+}
+
+func (m *Model) filterPickerList() {
+	query := strings.TrimSpace(m.pickerInput.Value())
+	if query == "" {
+		// Reload all entries
+		entries := m.recentStore.Load()
+		items := make([]list.Item, len(entries))
+		for i, e := range entries {
+			items[i] = RecentItem{entry: e}
+		}
+		m.pickerList.SetItems(items)
+		return
+	}
+	// Fuzzy filter
+	entries := m.recentStore.Load()
+	targets := make([]string, len(entries))
+	for i, e := range entries {
+		targets[i] = e.Handle + " " + e.Title
+	}
+	matches := fuzzy.Find(query, targets)
+	items := make([]list.Item, len(matches))
+	for i, match := range matches {
+		items[i] = RecentItem{entry: entries[match.Index]}
+	}
+	m.pickerList.SetItems(items)
+}
+
 // --- filter handling ---
 
 func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
+	switch {
+	case msg.String() == "enter":
 		// Apply filter and close input
 		m.filterText = m.filterInput.Value()
 		m.filtering = false
@@ -450,12 +617,22 @@ func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.applyFilterAndSort()
 		m.updateSizes() // filter bar may have changed visibility
 		return m, nil
-	case "esc":
+	case msg.String() == "esc":
 		// Cancel: revert to previous filter text
 		m.filtering = false
 		m.filterInput.Blur()
 		m.filterInput.SetValue(m.filterText)
 		m.updateSizes()
+		return m, nil
+	case key.Matches(msg, m.keys.ToggleFilterMode):
+		for i, fm := range filterModes {
+			if fm == m.filterMode {
+				m.filterMode = filterModes[(i+1)%len(filterModes)]
+				break
+			}
+		}
+		m.filterText = m.filterInput.Value()
+		m.applyFilterAndSort()
 		return m, nil
 	default:
 		// Forward to textinput
@@ -561,7 +738,8 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 
 	query := m.filterText
 
-	if m.filterMode == filterExact {
+	switch m.filterMode {
+	case filterExact:
 		// Case-insensitive substring match
 		lower := strings.ToLower(query)
 		var filtered []list.Item
@@ -571,27 +749,61 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 			}
 		}
 		return filtered
-	}
 
-	// Fuzzy match using sahilm/fuzzy
-	targets := make([]string, len(items))
-	for i, item := range items {
-		targets[i] = item.FilterValue()
-	}
+	case filterWords:
+		// All words must appear (case-insensitive, any order)
+		words := strings.Fields(strings.ToLower(query))
+		var filtered []list.Item
+		for _, item := range items {
+			val := strings.ToLower(item.FilterValue())
+			match := true
+			for _, w := range words {
+				if !strings.Contains(val, w) {
+					match = false
+					break
+				}
+			}
+			if match {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered
 
-	matches := fuzzy.Find(query, targets)
-	if preserveOrder {
-		// Sort matches by original index to preserve our sort order
-		sort.Slice(matches, func(i, j int) bool {
-			return matches[i].Index < matches[j].Index
-		})
+	case filterRegex:
+		re, err := regexp.Compile("(?i)" + query)
+		if err != nil {
+			// Invalid regex — show nothing rather than everything
+			return nil
+		}
+		var filtered []list.Item
+		for _, item := range items {
+			if re.MatchString(item.FilterValue()) {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered
+
+	default:
+		// Fuzzy match using sahilm/fuzzy
+		targets := make([]string, len(items))
+		for i, item := range items {
+			targets[i] = item.FilterValue()
+		}
+
+		matches := fuzzy.Find(query, targets)
+		if preserveOrder {
+			// Sort matches by original index to preserve our sort order
+			sort.Slice(matches, func(i, j int) bool {
+				return matches[i].Index < matches[j].Index
+			})
+		}
+		// When !preserveOrder, keep fuzzy relevance ranking
+		filtered := make([]list.Item, len(matches))
+		for i, match := range matches {
+			filtered[i] = items[match.Index]
+		}
+		return filtered
 	}
-	// When !preserveOrder, keep fuzzy relevance ranking
-	filtered := make([]list.Item, len(matches))
-	for i, match := range matches {
-		filtered[i] = items[match.Index]
-	}
-	return filtered
 }
 
 // --- other helpers ---
@@ -804,6 +1016,19 @@ func (m *Model) updateDetail() {
 }
 
 func (m *Model) updateSizes() {
+	if m.pickerMode {
+		// header + input + blank line + "Recent channels:" label + help = 5
+		pickerChrome := 5
+		pickerHeight := m.height - pickerChrome
+		if pickerHeight < 1 {
+			pickerHeight = 1
+		}
+		m.pickerInput.SetWidth(m.width - 2) // -2 for prompt "> "
+		m.pickerList.SetWidth(m.width)
+		m.pickerList.SetHeight(pickerHeight)
+		return
+	}
+
 	headerHeight := 2 // header + tab bar
 	if m.filtering || m.filterText != "" {
 		headerHeight++ // filter bar
@@ -846,6 +1071,44 @@ func (m *Model) detailWidth() int {
 }
 
 // --- rendering ---
+
+func (m Model) renderPickerView() tea.View {
+	var sections []string
+
+	title := headerStyle.Render("yt-browse")
+	sections = append(sections, title)
+	sections = append(sections, m.pickerInput.View())
+
+	if m.lastError != nil {
+		sections = append(sections, errorStyle.Render(fmt.Sprintf("Error: %s", m.lastError)))
+	} else if m.pickerResolving {
+		sections = append(sections, statusStyle.Render(fmt.Sprintf("Resolving %s...", m.channelInput)))
+	}
+
+	if len(m.pickerList.Items()) > 0 {
+		sections = append(sections, "")
+		sections = append(sections, statusStyle.Render("Recent channels:"))
+		sections = append(sections, m.pickerList.View())
+	} else if m.pickerInput.Value() == "" && !m.pickerResolving {
+		sections = append(sections, "")
+		sections = append(sections, statusStyle.Render("No recent channels. Type a channel handle, URL, or ID above."))
+	}
+
+	sep := helpDescStyle.Render(" · ")
+	helpLine := helpKeyStyle.Render("enter") + helpDescStyle.Render(" select") +
+		sep +
+		helpKeyStyle.Render("ctrl+o") + helpDescStyle.Render(" lookup as channel") +
+		sep +
+		helpKeyStyle.Render("↑↓") + helpDescStyle.Render(" navigate") +
+		sep +
+		helpKeyStyle.Render("ctrl+c") + helpDescStyle.Render(" quit")
+	sections = append(sections, helpLine)
+
+	str := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	v := tea.NewView(str)
+	v.AltScreen = true
+	return v
+}
 
 func (m Model) renderHeader() string {
 	if m.channel == nil {
@@ -908,10 +1171,7 @@ func (m Model) renderTabBar() string {
 }
 
 func (m Model) renderFilterBar() string {
-	modeLabel := "fuzzy"
-	if m.filterMode == filterExact {
-		modeLabel = "exact"
-	}
+	modeLabel := m.filterMode.String()
 
 	if m.filtering {
 		return m.filterInput.View() + "  " + filterModeStyle.Render("["+modeLabel+"]")
@@ -1042,7 +1302,7 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, helpOverlayTitleStyle.Render("Filter & Sort"))
 	lines = append(lines, row("/", "Start filtering"))
 	lines = append(lines, row("esc", "Clear filter"))
-	lines = append(lines, row("ctrl+f", "Toggle fuzzy / exact filter"))
+	lines = append(lines, row("ctrl+f", "Cycle filter mode (fuzzy/exact/words/regex)"))
 	lines = append(lines, row("d / D", "Sort by date (newest / oldest)"))
 	lines = append(lines, row("v / V", "Sort by views (most / fewest)"))
 	lines = append(lines, row("u / U", "Sort by duration (longest / shortest)"))

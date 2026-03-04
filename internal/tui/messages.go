@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/nroyalty/yt-browse/internal/youtube"
+import (
+	"github.com/nroyalty/yt-browse/internal/recent"
+	"github.com/nroyalty/yt-browse/internal/youtube"
+)
 
 // Channel resolution
 type channelResolvedMsg struct{ channel *youtube.Channel }
@@ -30,3 +33,6 @@ type videoLoadingMsg struct {
 // Playlist video fetching (drill-in)
 type playlistVideosFetchedMsg struct{ videos []youtube.Video }
 type playlistVideosErrorMsg struct{ err error }
+
+// Recent channels
+type recentChannelsLoadedMsg struct{ entries []recent.Entry }

@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/nroyalty/yt-browse/internal/cache"
+	"github.com/nroyalty/yt-browse/internal/recent"
 	"github.com/nroyalty/yt-browse/internal/youtube"
 )
 
@@ -88,6 +89,19 @@ func fetchPlaylistVideosCmd(client *youtube.Client, store *cache.Store, playlist
 		}
 		_ = store.SetPlaylistVideos(channelID, playlistID, videos)
 		return playlistVideosFetchedMsg{videos: videos}
+	}
+}
+
+func loadRecentCmd(store *recent.Store) tea.Cmd {
+	return func() tea.Msg {
+		return recentChannelsLoadedMsg{entries: store.Load()}
+	}
+}
+
+func saveRecentCmd(store *recent.Store, ch *youtube.Channel) tea.Cmd {
+	return func() tea.Msg {
+		store.Add(ch.ID, ch.Title, ch.Handle)
+		return nil
 	}
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -95,7 +96,8 @@ func (d *highlightDelegate) Render(w io.Writer, m list.Model, index int, item li
 
 // computeTitleMatches returns rune indices in title that match the query.
 func computeTitleMatches(title, query string, mode filterMode) []int {
-	if mode == filterExact {
+	switch mode {
+	case filterExact:
 		titleLower := strings.ToLower(title)
 		queryLower := strings.ToLower(query)
 		idx := strings.Index(titleLower, queryLower)
@@ -110,12 +112,47 @@ func computeTitleMatches(title, query string, mode filterMode) []int {
 			indices[i] = runeOffset + i
 		}
 		return indices
-	}
 
-	// Fuzzy match
-	matches := fuzzy.Find(query, []string{title})
-	if len(matches) == 0 {
-		return nil
+	case filterWords:
+		titleLower := strings.ToLower(title)
+		words := strings.Fields(strings.ToLower(query))
+		var indices []int
+		for _, w := range words {
+			idx := strings.Index(titleLower, w)
+			if idx < 0 {
+				continue
+			}
+			runeOffset := len([]rune(titleLower[:idx]))
+			for i := range len([]rune(w)) {
+				indices = append(indices, runeOffset+i)
+			}
+		}
+		return indices
+
+	case filterRegex:
+		re, err := regexp.Compile("(?i)" + query)
+		if err != nil {
+			return nil
+		}
+		loc := re.FindStringIndex(title)
+		if loc == nil {
+			return nil
+		}
+		// Convert byte offsets to rune indices
+		runeStart := len([]rune(title[:loc[0]]))
+		runeEnd := len([]rune(title[:loc[1]]))
+		indices := make([]int, runeEnd-runeStart)
+		for i := range indices {
+			indices[i] = runeStart + i
+		}
+		return indices
+
+	default:
+		// Fuzzy match
+		matches := fuzzy.Find(query, []string{title})
+		if len(matches) == 0 {
+			return nil
+		}
+		return matches[0].MatchedIndexes
 	}
-	return matches[0].MatchedIndexes
 }
