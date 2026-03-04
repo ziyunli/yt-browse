@@ -2,6 +2,8 @@
 
 `yt-browse` is a TUI that gives you power-user search for a youtube channel's playlists and videos.
 
+https://github.com/user-attachments/assets/2a01ae61-c3bf-474e-b9d9-3da256190327
+
 The youtube channel search experience is *bad*. You can't limit your search to just playlists or videos, filter out shorts, order your results in any way, or restrict your search to a date range.
 
 `yt-browse` fixes that:
