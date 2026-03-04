@@ -14,8 +14,10 @@ import (
 
 // filterState holds shared filter state between the Model and the delegate.
 type filterState struct {
-	text string
-	mode filterMode
+	text       string
+	mode       filterMode
+	flashIndex int  // index of item to flash green (-1 = none)
+	flashOn    bool // whether the flash is currently active
 }
 
 // highlightDelegate wraps list.DefaultDelegate to add match highlighting
@@ -69,7 +71,14 @@ func (d *highlightDelegate) Render(w io.Writer, m list.Model, index int, item li
 		matchedRunes = computeTitleMatches(title, d.filter.text, d.filter.mode)
 	}
 
-	if isSelected {
+	isFlashed := d.filter.flashOn && d.filter.flashIndex == index
+
+	if isFlashed {
+		greenTitle := s.NormalTitle.Foreground(lipgloss.Color("#00FF00"))
+		greenDesc := s.NormalDesc.Foreground(lipgloss.Color("#00FF00"))
+		title = greenTitle.Render(title)
+		desc = greenDesc.Render(desc)
+	} else if isSelected {
 		if len(matchedRunes) > 0 {
 			unmatched := s.SelectedTitle.Inline(true)
 			matched := unmatched.Inherit(s.FilterMatch)

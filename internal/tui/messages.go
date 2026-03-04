@@ -36,3 +36,6 @@ type playlistVideosErrorMsg struct{ err error }
 
 // Recent channels
 type recentChannelsLoadedMsg struct{ entries []recent.Entry }
+
+// UI flash
+type clearFlashMsg struct{}

@@ -8,6 +8,7 @@ type keyMap struct {
 	Enter            key.Binding
 	OpenURL          key.Binding
 	OpenPlaylist     key.Binding
+	CopyURL          key.Binding
 	Back             key.Binding
 	Filter           key.Binding
 	ClearFilter      key.Binding
@@ -18,6 +19,8 @@ type keyMap struct {
 	SortViewsRev     key.Binding
 	SortDuration     key.Binding
 	SortDurationRev  key.Binding
+	SortCount        key.Binding
+	SortCountRev     key.Binding
 	Refresh          key.Binding
 	Help             key.Binding
 }
@@ -43,6 +46,10 @@ func defaultKeyMap() keyMap {
 		OpenPlaylist: key.NewBinding(
 			key.WithKeys("shift+enter", "O"),
 			key.WithHelp("shift+enter", "open playlist"),
+		),
+		CopyURL: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy URL"),
 		),
 		Back: key.NewBinding(
 			key.WithKeys("backspace"),
@@ -83,6 +90,14 @@ func defaultKeyMap() keyMap {
 		SortDurationRev: key.NewBinding(
 			key.WithKeys("U"),
 			key.WithHelp("U", "sort by duration (reverse)"),
+		),
+		SortCount: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "sort by count"),
+		),
+		SortCountRev: key.NewBinding(
+			key.WithKeys("C"),
+			key.WithHelp("C", "sort by count (reverse)"),
 		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/key"
@@ -44,6 +45,7 @@ const (
 	sortByDate
 	sortByViews
 	sortByDuration
+	sortByCount
 )
 
 type sortDir int
@@ -142,12 +144,16 @@ type Model struct {
 	// Help overlay
 	showHelp bool
 
+	// Status flash (e.g. "Copied!")
+	flashMessage string
+	flashExpiry  time.Time
+
 	// Error
 	lastError error
 }
 
 func New(cfg *config.Config, ytClient *youtube.Client, cacheStore *cache.Store, recentStore *recent.Store, channelInput string) Model {
-	fs := &filterState{}
+	fs := &filterState{flashIndex: -1}
 	delegate := newHighlightDelegate(fs)
 
 	playlistList := list.New([]list.Item{}, delegate, 0, 0)
@@ -308,6 +314,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.OpenURL):
 			return m.handleOpenURL()
 
+		case key.Matches(msg, m.keys.CopyURL):
+			return m.handleCopyURL()
+
 		case key.Matches(msg, m.keys.OpenPlaylist):
 			if m.activeView == viewPlaylistVideos && m.currentPlaylist != nil {
 				return m, openURLCmd(m.currentPlaylist.URL())
@@ -375,6 +384,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.SortDurationRev):
 			if m.activeView == viewVideos || m.activeView == viewPlaylistVideos {
 				m.toggleSort(sortByDuration, sortAsc)
+				m.applyFilterAndSort()
+				m.updateDetail()
+				return m, nil
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.SortCount):
+			if m.activeView == viewPlaylists {
+				m.toggleSort(sortByCount, sortDesc)
+				m.applyFilterAndSort()
+				m.updateDetail()
+				return m, nil
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.SortCountRev):
+			if m.activeView == viewPlaylists {
+				m.toggleSort(sortByCount, sortAsc)
 				m.applyFilterAndSort()
 				m.updateDetail()
 				return m, nil
@@ -467,6 +494,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playlistVideosErrorMsg:
 		m.playlistVideoLoadState = loadError
 		m.lastError = msg.err
+		return m, nil
+
+	case clearFlashMsg:
+		m.flashMessage = ""
+		m.fstate.flashOn = false
 		return m, nil
 
 	}
@@ -691,6 +723,13 @@ func (m *Model) sortedPlaylistItems() []list.Item {
 				return sorted[i].PublishedAt.Before(sorted[j].PublishedAt)
 			}
 			return sorted[i].PublishedAt.After(sorted[j].PublishedAt)
+		})
+	case sortByCount:
+		sort.Slice(sorted, func(i, j int) bool {
+			if asc {
+				return sorted[i].ItemCount < sorted[j].ItemCount
+			}
+			return sorted[i].ItemCount > sorted[j].ItemCount
 		})
 	}
 
@@ -958,6 +997,39 @@ func (m *Model) handleOpenURL() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handleCopyURL() (tea.Model, tea.Cmd) {
+	selected := m.activeList().SelectedItem()
+	if selected == nil {
+		return m, nil
+	}
+
+	var url string
+	switch item := selected.(type) {
+	case PlaylistItem:
+		url = item.URL()
+	case VideoItem:
+		url = item.URL()
+	}
+	if url != "" {
+		m.flashMessage = "Copied!"
+		m.flashExpiry = time.Now().Add(1 * time.Second)
+		m.fstate.flashIndex = m.activeList().Index()
+		m.fstate.flashOn = true
+		return m, tea.Batch(
+			tea.SetClipboard(url),
+			clearFlashAfter(1*time.Second),
+		)
+	}
+	return m, nil
+}
+
+func clearFlashAfter(d time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(d)
+		return clearFlashMsg{}
+	}
+}
+
 func (m *Model) handleBack() (tea.Model, tea.Cmd) {
 	m.activeView = viewPlaylists
 	m.currentPlaylist = nil
@@ -1140,6 +1212,9 @@ func (m Model) renderHeader() string {
 		return statusStyle.Render(fmt.Sprintf("Resolving %s...", m.channelInput))
 	}
 	title := fmt.Sprintf("yt-browse: %s (%s)", m.channel.Handle, m.channel.Title)
+	if m.flashMessage != "" {
+		return headerStyle.Render(title) + "  " + flashStyle.Render(m.flashMessage)
+	}
 	return headerStyle.Render(title)
 }
 
@@ -1195,8 +1270,10 @@ func (m Model) renderTabBar() string {
 func (m Model) renderFilterBar() string {
 	modeLabel := m.filterMode.String()
 
+	modeHint := filterModeStyle.Render("["+modeLabel+" · ctrl+f to change]")
+
 	if m.filtering {
-		return m.filterInput.View() + "  " + filterModeStyle.Render("["+modeLabel+"]")
+		return m.filterInput.View() + "  " + modeHint
 	}
 
 	// Show applied filter (not actively editing)
@@ -1270,7 +1347,8 @@ func (m Model) renderHelpBar() string {
 	var parts []string
 	sep := helpDescStyle.Render(" · ")
 
-	// Filter status
+	parts = append(parts, helpItem("q", "uit", false, sortDesc))
+	parts = append(parts, helpItem("?", " help", false, sortDesc))
 	parts = append(parts, helpItem("/", "filter", false, sortDesc))
 	if m.filterText != "" {
 		parts = append(parts, helpItem("esc", " clear", false, sortDesc))
@@ -1281,11 +1359,14 @@ func (m Model) renderHelpBar() string {
 		parts = append(parts, helpItem("tab", " switch", false, sortDesc))
 		parts = append(parts, helpItem("⏎", " view", false, sortDesc))
 		parts = append(parts, helpItem("o", "pen", false, sortDesc))
+		parts = append(parts, helpItem("y", "ank", false, sortDesc))
 		parts = append(parts, helpItem("d", "ate", m.playlistSort == sortByDate, m.playlistSortDir))
+		parts = append(parts, helpItem("c", "ount", m.playlistSort == sortByCount, m.playlistSortDir))
 
 	case viewVideos:
 		parts = append(parts, helpItem("tab", " switch", false, sortDesc))
 		parts = append(parts, helpItem("⏎", " open", false, sortDesc))
+		parts = append(parts, helpItem("y", "ank", false, sortDesc))
 		parts = append(parts, helpItem("d", "ate", m.videoSort == sortByDate, m.videoSortDir))
 		parts = append(parts, helpItem("v", "iews", m.videoSort == sortByViews, m.videoSortDir))
 		parts = append(parts, helpItemMid("d", "u", "ration", m.videoSort == sortByDuration, m.videoSortDir))
@@ -1293,13 +1374,11 @@ func (m Model) renderHelpBar() string {
 	case viewPlaylistVideos:
 		parts = append(parts, helpItem("⌫", " back", false, sortDesc))
 		parts = append(parts, helpItem("⏎", " open", false, sortDesc))
+		parts = append(parts, helpItem("y", "ank", false, sortDesc))
 		parts = append(parts, helpItem("d", "ate", m.playlistVideoSort == sortByDate, m.playlistVideoSortDir))
 		parts = append(parts, helpItem("v", "iews", m.playlistVideoSort == sortByViews, m.playlistVideoSortDir))
 		parts = append(parts, helpItemMid("d", "u", "ration", m.playlistVideoSort == sortByDuration, m.playlistVideoSortDir))
 	}
-
-	parts = append(parts, helpItem("?", " help", false, sortDesc))
-	parts = append(parts, helpItem("q", "uit", false, sortDesc))
 
 	return strings.Join(parts, sep)
 }
@@ -1318,6 +1397,7 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, row("tab", "Switch between playlists/videos"))
 	lines = append(lines, row("enter", "Open video / drill into playlist"))
 	lines = append(lines, row("o", "Open selected item in browser"))
+	lines = append(lines, row("y", "Copy URL to clipboard"))
 	lines = append(lines, row("backspace", "Back to playlists (from drill view)"))
 	lines = append(lines, row("S-enter / O", "Open playlist URL (from drill view)"))
 	lines = append(lines, "")
@@ -1328,6 +1408,7 @@ func (m Model) renderHelpOverlay() string {
 	lines = append(lines, row("d / D", "Sort by date (newest / oldest)"))
 	lines = append(lines, row("v / V", "Sort by views (most / fewest)"))
 	lines = append(lines, row("u / U", "Sort by duration (longest / shortest)"))
+	lines = append(lines, row("c / C", "Sort by count (most / fewest, playlists)"))
 	lines = append(lines, "")
 	lines = append(lines, helpOverlayTitleStyle.Render("Other"))
 	lines = append(lines, row("r", "Refresh data from API"))
