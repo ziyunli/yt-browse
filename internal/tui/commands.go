@@ -11,8 +11,15 @@ import (
 	"github.com/nroyalty/yt-browse/internal/youtube"
 )
 
-func resolveChannelCmd(client *youtube.Client, store *cache.Store, input string) tea.Cmd {
+func resolveChannelCmd(client *youtube.Client, store *cache.Store, input string, knownChannelID string) tea.Cmd {
 	return func() tea.Msg {
+		// If we know the channel ID (e.g. from recent list), try cache first
+		if knownChannelID != "" {
+			if cached, _ := store.GetChannel(knownChannelID); cached != nil {
+				return channelResolvedMsg{channel: cached}
+			}
+		}
+
 		ctx := context.Background()
 		ch, err := client.ResolveChannel(ctx, input)
 		if err != nil {

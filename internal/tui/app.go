@@ -86,8 +86,9 @@ type Model struct {
 	// Recent channels
 	recentStore     *recent.Store
 	pickerMode      bool
-	pickerResolving bool
-	pickerList      list.Model
+	pickerResolving      bool
+	pickerKnownChannelID string
+	pickerList           list.Model
 	pickerInput     textinput.Model
 
 	// Channel
@@ -235,7 +236,7 @@ func (m Model) Init() tea.Cmd {
 		// value receiver so the state change on this copy is harmless).
 		return tea.Batch(m.pickerInput.Focus(), loadRecentCmd(m.recentStore))
 	}
-	return resolveChannelCmd(m.ytClient, m.cache, m.channelInput)
+	return resolveChannelCmd(m.ytClient, m.cache, m.channelInput, "")
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -568,6 +569,9 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if msg.String() == "ctrl+d" && strings.TrimSpace(m.pickerInput.Value()) == "" {
+		return m, tea.Quit
+	}
 	// Block input while resolving
 	if m.pickerResolving {
 		return m, nil
@@ -581,11 +585,13 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.channelInput == "" {
 				m.channelInput = ri.entry.ID
 			}
+			m.pickerKnownChannelID = ri.entry.ID
 			return m.resolvePickerChannel()
 		}
 		// No list results — treat input as a new channel lookup
 		if input := strings.TrimSpace(m.pickerInput.Value()); input != "" {
 			m.channelInput = input
+			m.pickerKnownChannelID = ""
 			return m.resolvePickerChannel()
 		}
 		return m, nil
@@ -621,7 +627,7 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) resolvePickerChannel() (tea.Model, tea.Cmd) {
 	m.pickerResolving = true
 	m.lastError = nil
-	return m, resolveChannelCmd(m.ytClient, m.cache, m.channelInput)
+	return m, resolveChannelCmd(m.ytClient, m.cache, m.channelInput, m.pickerKnownChannelID)
 }
 
 func (m *Model) filterPickerList() {
@@ -1166,7 +1172,7 @@ func (m *Model) handleBack() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleRefresh() (tea.Model, tea.Cmd) {
 	if m.channel == nil {
-		return m, resolveChannelCmd(m.ytClient, m.cache, m.channelInput)
+		return m, resolveChannelCmd(m.ytClient, m.cache, m.channelInput, "")
 	}
 	switch m.activeView {
 	case viewPlaylists:
