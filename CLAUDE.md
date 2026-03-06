@@ -77,3 +77,6 @@ internal/
 
 - Sorting + filtering interaction has been the trickiest area. Current behavior: sort and filter compose correctly, with explicit sort overriding fuzzy relevance ranking.
 - The Esc key is overloaded: clears filter when active, goes back from drill-in view when no filter.
+- **Bubble Tea v2 API**: `View()` returns `tea.View` (use `tea.NewView(s)`), not `string`. `textinput` uses `ti.SetWidth()` method, not `ti.Width` field.
+- **No tests yet** -- project has no `_test.go` files. When adding tests, start from scratch.
+- **Always create a feature branch before implementation work.** Do not commit directly to main.
