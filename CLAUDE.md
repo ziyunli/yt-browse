@@ -8,8 +8,8 @@ Target audience is primarily the author, but will be open-sourced eventually.
 
 - **Build & install**: `go build -o yt-browse ./cmd/yt-browse && mv yt-browse ~/bin/` (or `./install.sh`)
 - **Run**: `yt-browse <channel>` -- accepts @handle, channel URL, channel ID, or bare username
-- **Required env**: `YT_BROWSE_API_KEY` (YouTube Data API v3 key)
-- **Optional env**: `YT_BROWSE_CACHE_DIR` (default `~/.yt-browse/cache`), `YT_BROWSE_CACHE_TTL` (default `24h`)
+- **Config file**: `~/.config/yt-browse/config.toml` (created on first run via setup wizard)
+- **Env overrides**: `YT_BROWSE_API_KEY`, `YT_BROWSE_CACHE_DIR`, `YT_BROWSE_CACHE_TTL` (override config file values)
 
 ## Architecture
 
@@ -18,8 +18,11 @@ Standard Bubble Tea (Elm architecture) app. Unidirectional data flow: Cmds fetch
 ```
 cmd/yt-browse/main.go        -- entry point, arg parsing
 internal/
-  config/                     -- env var config (API key, cache settings)
+  config/
+    config.go                 -- TOML config loading, env var overrides, tilde expansion
+    setup.go                  -- first-run Bubble Tea setup wizard, writes config.toml
   cache/                      -- file-based JSON cache with TTL, generic over data type
+  recent/                     -- recent channels store (JSON file alongside cache)
   youtube/
     types.go                  -- Channel, Playlist, Video domain types
     client.go                 -- YouTube API v3 wrapper (playlists, videos)
@@ -30,10 +33,12 @@ internal/
     messages.go               -- Msg types returned by Cmds
     keys.go                   -- keybinding definitions
     styles.go                 -- lipgloss styles
+    filter.go                 -- custom filter state and logic
     delegate.go               -- custom list delegate with fuzzy match highlighting
     detail.go                 -- right-side detail pane rendering
     playlist_item.go          -- list.DefaultItem adapter for Playlist
     video_item.go             -- list.DefaultItem adapter for Video
+    recent_item.go            -- list.DefaultItem adapter for recent channels
 ```
 
 ## Key design decisions
@@ -60,7 +65,17 @@ internal/
 - 24h TTL by default. Users can force-refresh with `r`.
 - Cache write errors are silently ignored -- app works fine without cache.
 
+## Configuration
+
+- Config file at `~/.config/yt-browse/config.toml` with keys: `api_key`, `cache_dir`, `cache_ttl`.
+- First run with no config file and no `YT_BROWSE_API_KEY` env var triggers a Bubble Tea setup wizard that prompts for the API key and writes the config file with defaults.
+- Env vars always override config file values. If `YT_BROWSE_API_KEY` is set, the app works without a config file.
+- `cache_dir` supports `~/` paths (expanded via `config.expandTilde`).
+- Config file permissions are `0o600` since it contains an API key.
+
 ## Known context
 
 - Sorting + filtering interaction has been the trickiest area. Current behavior: sort and filter compose correctly, with explicit sort overriding fuzzy relevance ranking.
 - The Esc key is overloaded: clears filter when active, goes back from drill-in view when no filter.
+- **Bubble Tea v2 API**: `View()` returns `tea.View` (use `tea.NewView(s)`), not `string`. `textinput` uses `ti.SetWidth()` method, not `ti.Width` field.
+- **No tests yet** -- project has no `_test.go` files. When adding tests, start from scratch.
