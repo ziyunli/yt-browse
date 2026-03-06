@@ -64,11 +64,12 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "ctrl+c":
 			m.cancelled = true
 			return m, tea.Quit
+		default:
+			m.err = ""
 		}
 	}
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
-	m.err = ""
 	return m, cmd
 }
 
