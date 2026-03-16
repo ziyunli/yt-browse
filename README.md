@@ -53,7 +53,7 @@ See [docs/configuration.md](docs/configuration.md) for full configuration detail
 Requires [Go](https://go.dev/) 1.21+.
 
 ```bash
-git clone https://github.com/nolenroyalty/yt-browse
+git clone https://github.com/ziyunli/yt-browse
 cd yt-browse
 go build -o yt-browse ./cmd/yt-browse
 ```
@@ -86,43 +86,43 @@ Config file: `~/.config/yt-browse/config.toml` (created on first run via setup w
 
 Environment variables override config file values:
 
-| Variable | Default | Description |
-|---|---|---|
-| `YT_BROWSE_API_KEY` | *(required)* | YouTube Data API v3 key |
-| `YT_BROWSE_CACHE_DIR` | `~/.yt-browse/cache` | Cache directory |
-| `YT_BROWSE_CACHE_TTL` | `24h` | Cache TTL (Go duration format) |
+| Variable              | Default              | Description                    |
+| --------------------- | -------------------- | ------------------------------ |
+| `YT_BROWSE_API_KEY`   | *(required)*         | YouTube Data API v3 key        |
+| `YT_BROWSE_CACHE_DIR` | `~/.yt-browse/cache` | Cache directory                |
+| `YT_BROWSE_CACHE_TTL` | `24h`                | Cache TTL (Go duration format) |
 
 ## Keybindings
 
 ### Navigation
 
-| Key | Action |
-|---|---|
-| `tab` | Switch between playlists / videos |
-| `enter` | Open video / drill into playlist |
-| `o` | Open selected item in browser |
-| `y` | Copy URL to clipboard |
+| Key         | Action                              |
+| ----------- | ----------------------------------- |
+| `tab`       | Switch between playlists / videos   |
+| `enter`     | Open video / drill into playlist    |
+| `o`         | Open selected item in browser       |
+| `y`         | Copy URL to clipboard               |
 | `backspace` | Back to playlists (from drill view) |
 
 ### Filter & sort
 
-| Key | Action |
-|---|---|
-| `/` | Start filtering |
-| `esc` | Clear filter |
-| `ctrl+t` | Cycle filter mode (words / regex / fuzzy) |
-| `ctrl+d` | Toggle title-only / title+description search |
-| `d` / `D` | Sort by date (newest / oldest) |
-| `v` / `V` | Sort by views (most / fewest) |
-| `u` / `U` | Sort by duration (longest / shortest) |
+| Key       | Action                                        |
+| --------- | --------------------------------------------- |
+| `/`       | Start filtering                               |
+| `esc`     | Clear filter                                  |
+| `ctrl+t`  | Cycle filter mode (words / regex / fuzzy)     |
+| `ctrl+d`  | Toggle title-only / title+description search  |
+| `d` / `D` | Sort by date (newest / oldest)                |
+| `v` / `V` | Sort by views (most / fewest)                 |
+| `u` / `U` | Sort by duration (longest / shortest)         |
 | `c` / `C` | Sort by count (most / fewest, playlists only) |
 
 You can also use `before:` and `after:` date filters (e.g. `after:2024 before:2025-06`).
 
 ### Other
 
-| Key | Action |
-|---|---|
-| `r` | Refresh data from API (bypass cache) |
-| `?` | Show keybindings overlay |
-| `q` / `ctrl+c` | Quit |
+| Key            | Action                               |
+| -------------- | ------------------------------------ |
+| `r`            | Refresh data from API (bypass cache) |
+| `?`            | Show keybindings overlay             |
+| `q` / `ctrl+c` | Quit                                 |
