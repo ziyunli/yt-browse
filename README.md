@@ -34,13 +34,19 @@ The Youtube API requires an API key. The API is free; the default limits are rel
 
 Again: the API is free. The default quota (~10,000 units/day) is enough to browse ~500k playlists or ~250k videos per day. Results are cached locally for 24 hours so repeatedly visiting a channel on the same day doesn't cost you API quota.
 
-### 2. Set the environment variable
+### 2. Configure
+
+On first run, `yt-browse` launches an interactive setup wizard that prompts for your API key and writes a config file to `~/.config/yt-browse/config.toml`.
+
+Alternatively, you can set the environment variable directly:
 
 ```bash
 export YT_BROWSE_API_KEY=your_key_here
 ```
 
-Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to persist it.
+Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to persist it. Environment variables always override config file values.
+
+See [docs/configuration.md](docs/configuration.md) for full configuration details.
 
 ### 3. Build
 
@@ -74,7 +80,11 @@ The channel argument accepts any of:
 
 If omitted, opens a picker with your recently-browsed channels.
 
-### Environment variables
+### Configuration
+
+Config file: `~/.config/yt-browse/config.toml` (created on first run via setup wizard).
+
+Environment variables override config file values:
 
 | Variable | Default | Description |
 |---|---|---|

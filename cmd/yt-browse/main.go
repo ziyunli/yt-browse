@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,8 +27,11 @@ func main() {
 			fmt.Println("  channel   @handle, channel URL, channel ID, or username")
 			fmt.Println("            If omitted, opens a picker with recent channels.")
 			fmt.Println()
-			fmt.Println("Environment variables:")
-			fmt.Println("  YT_BROWSE_API_KEY    YouTube Data API v3 key (required)")
+			fmt.Println("Configuration:")
+			fmt.Println("  Config file: ~/.config/yt-browse/config.toml (created on first run)")
+			fmt.Println()
+			fmt.Println("Environment variables (override config file):")
+			fmt.Println("  YT_BROWSE_API_KEY    YouTube Data API v3 key")
 			fmt.Println("  YT_BROWSE_CACHE_DIR  Cache directory (default: ~/.yt-browse/cache)")
 			fmt.Println("  YT_BROWSE_CACHE_TTL  Cache TTL (default: 24h)")
 			fmt.Println()
@@ -43,6 +47,13 @@ func main() {
 	}
 
 	cfg, err := config.Load()
+	if errors.Is(err, config.ErrConfigNotFound) {
+		if setupErr := config.RunSetup(); setupErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", setupErr)
+			os.Exit(1)
+		}
+		cfg, err = config.Load()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
