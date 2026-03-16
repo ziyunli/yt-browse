@@ -45,9 +45,10 @@ internal/
 
 - **Three separate list.Model instances** (playlists, videos, playlist-videos) so scroll position / selection is preserved when switching tabs.
 - **Raw data kept separate from list items** -- canonical data in `[]youtube.Playlist` / `[]youtube.Video` slices, list items recomputed on every sort/filter via `applyFilterAndSort()`.
-- **Custom filter system** instead of Bubble Tea's built-in list filtering. Supports both fuzzy (default, via `sahilm/fuzzy`) and exact (case-insensitive substring) modes. Filter searches both title and description.
+- **Custom filter system** instead of Bubble Tea's built-in list filtering. Supports fuzzy (default, via `sahilm/fuzzy`), words (all words must appear, case-insensitive), and regex modes. Filter searches both title and description.
 - **Shared mutable `*filterState` pointer** between Model and delegate -- intentional shortcut that works because Bubble Tea is single-threaded.
 - **Fuzzy relevance vs explicit sort**: when no sort is active, fuzzy results rank by relevance. When a sort IS active, it wins over fuzzy relevance.
+- **Sort+filter pipeline**: `applyFilterAndSort()` first sorts the full list, then `filterItems()` narrows it. The `preserveOrder` param in `filterItems` is critical for fuzzy mode — when `true`, fuzzy matching only filters (keeps sorted order); when `false`, `fuzzy.Find` reorders by relevance score.
 - **Videos fetched eagerly** in the background as soon as playlists load, so switching to the Videos tab is instant.
 - **Shorts hidden by default** (videos <= 60s). Toggle with `s`.
 

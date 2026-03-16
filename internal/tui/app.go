@@ -362,10 +362,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			key.Matches(msg, m.keys.SortDurationRev),
 			key.Matches(msg, m.keys.SortCount),
 			key.Matches(msg, m.keys.SortCountRev):
-			// Sorting disabled during fuzzy filter — fuzzy results are relevance-ranked
-			if m.filterText != "" && m.filterMode == filterFuzzy {
-				return m, nil
-			}
 			switch {
 			case key.Matches(msg, m.keys.SortDate):
 				m.toggleSort(sortByDate, sortDesc)
@@ -740,8 +736,8 @@ func (m *Model) applyFilterAndSort() {
 		m.fstate.regexError = false
 	}
 
-	// In fuzzy mode, relevance ranking always wins (sorting is disabled).
-	useFuzzyRanking := m.filterText != "" && m.filterMode == filterFuzzy
+	// In fuzzy mode, relevance ranking wins unless an explicit sort is active.
+	useFuzzyRanking := m.filterText != "" && m.filterMode == filterFuzzy && *m.activeSortField() == sortNone
 
 	switch m.activeView {
 	case viewPlaylists:
@@ -981,7 +977,22 @@ func (m *Model) filterItems(items []list.Item, preserveOrder bool) []list.Item {
 		}
 
 		matches := fuzzy.Find(query, targets)
-		// Fuzzy results are always relevance-ranked (sorting is disabled in fuzzy mode)
+		if preserveOrder {
+			// An explicit sort is active — keep the input order (which is
+			// already sorted) and just drop non-matching items.
+			matched := make(map[int]struct{}, len(matches))
+			for _, match := range matches {
+				matched[match.Index] = struct{}{}
+			}
+			filtered := make([]list.Item, 0, len(matches))
+			for i, item := range items {
+				if _, ok := matched[i]; ok {
+					filtered = append(filtered, item)
+				}
+			}
+			return filtered
+		}
+		// No explicit sort — rank by fuzzy relevance.
 		filtered := make([]list.Item, len(matches))
 		for i, match := range matches {
 			filtered[i] = items[match.Index]
