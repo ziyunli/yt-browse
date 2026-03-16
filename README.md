@@ -1,5 +1,7 @@
 # yt-browse
 
+This is a fork of https://github.com/nolenroyalty/yt-browse.
+
 `yt-browse` is a TUI that gives you power-user search for a youtube channel's playlists and videos.
 
 https://github.com/user-attachments/assets/2a01ae61-c3bf-474e-b9d9-3da256190327
